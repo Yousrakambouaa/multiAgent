@@ -3,7 +3,7 @@ import argparse
 import asyncio
 import json
 
-from studio.config import ROOT
+from studio.config import JOBS, ROOT, safe_path
 from studio.costs import Ledger
 from studio.registry import Registry
 from studio.state import ProcessLock
@@ -15,6 +15,46 @@ async def console(text):
 
 
 async def run(args):
+    if args.command in ("mcp-status", "mcp-smoke"):
+        from studio.mcp_client import AGENT_TOOLS, MCPError, UnityMCPClient
+        try:
+            client = UnityMCPClient.from_environment()
+        except MCPError as error:
+            print(f"Unity MCP configuration failed: {error}")
+            return 1
+        if client is None:
+            print("Unity MCP is disabled. Set STUDIO_UNITY_MCP_ENABLED=1 in .env to enable it.")
+            return 0
+        marker = JOBS / "current.txt"
+        try:
+            job_id = marker.read_text(encoding="utf-8").strip()
+            job_dir = safe_path(JOBS, job_id)
+        except (OSError, ValueError):
+            job_dir = None
+        project = job_dir / "UnityProject" if job_dir and (job_dir / "job.json").is_file() else None
+        if project is None or not project.is_dir():
+            print("No current job UnityProject exists. Create/approve a game first.")
+            return 1
+        try:
+            await client.connect()
+            info = await client.verify_project(project)
+            if args.command == "mcp-smoke":
+                result = await client.smoke_test(project)
+                print(json.dumps({"status": "passed", "server": client.server_info,
+                                  "unity": info.get("unityVersion"), "smoke_test": result}, indent=2))
+            else:
+                available = {agent: sorted(names.intersection(client.tools))
+                             for agent, names in AGENT_TOOLS.items()}
+                print(json.dumps({"status": "connected", "server": client.server_info,
+                                  "project": str(project), "unity": info.get("unityVersion"),
+                                  "discovered_tool_count": len(client.tools),
+                                  "agent_tools": available}, indent=2))
+            return 0
+        except MCPError as error:
+            print(f"Unity MCP check failed: {error}")
+            return 1
+        finally:
+            await client.close()
     if args.command == "models":
         registry=Registry(); await registry.refresh()
         print("Verified at",registry.verified_at)
@@ -59,7 +99,7 @@ def main():
         if name=="create": command.add_argument("description")
         if name in ("create","demo"): command.add_argument("--approve",action="store_true")
         command.add_argument("--android",action="store_true")
-    for name in ("models","status","plan","cancel"): sub.add_parser(name)
+    for name in ("models","status","plan","cancel","mcp-status","mcp-smoke"): sub.add_parser(name)
     args=parser.parse_args()
     with ProcessLock(ROOT/".studio_cache"/"controller.lock"):
         return asyncio.run(run(args))

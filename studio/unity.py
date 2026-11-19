@@ -6,11 +6,14 @@ import shutil
 import time
 import os
 import xml.etree.ElementTree as ET
+import logging
 from pathlib import Path
 
 from studio.config import ROOT, TEMPLATES, UNITY, safe_path
 from studio.schemas import CodeBundle, SceneBundle
 from studio.state import JobCancelled, write_json
+
+log = logging.getLogger(__name__)
 
 RUNTIME_CONTRACT = """Studio.Runtime.LevelRules : MonoBehaviour has virtual Configure(PlayerMotor player), virtual int CoinPoints().
 PlayerMotor has public float moveSpeed, jumpSpeed; Rigidbody2D Body; bool Grounded; bool TryJump().
@@ -97,6 +100,10 @@ class UnityRunner:
     def __init__(self, job, project):
         self.job, self.project = job, project
 
+    def flexible(self):
+        path = self.project / "Assets/Resources/studio_scenes.json"
+        return path.is_file() and json.loads(path.read_text(encoding="utf-8")).get("version") == 2
+
     async def run(self, stage, extra, timeout=600, graphics=False):
         if not UNITY.is_file():
             raise UnityFailure(stage, "Configured Unity Editor does not exist", "infrastructure")
@@ -150,29 +157,70 @@ class UnityRunner:
         path = safe_path(self.project, "Artifacts/assembly.json")
         path.unlink(missing_ok=True)
         try:
-            await self.run("assembly", ["-quit", "-executeMethod", "StudioSceneBuilder.Assemble"])
+            await self.run("assembly", ["-quit", "-executeMethod",
+                "UniversalSceneBuilder.Assemble" if self.flexible() else "StudioSceneBuilder.Assemble"])
         except UnityFailure:
             if not path.is_file(): raise
         if not path.is_file():
             raise UnityFailure("assembly", "Unity exited without writing assembly evidence", "scene")
         report = json.loads(path.read_text(encoding="utf-8"))
-        if not report.get("success") or report.get("scenes", 0) < 3:
+        minimum = len(json.loads((self.project / "Assets/Resources/studio_scenes.json").read_text(encoding="utf-8"))["scenes"]) if self.flexible() else 3
+        count = report.get("scenes", 0)
+        if not report.get("success") or (count != minimum if self.flexible() else count < minimum):
             raise UnityFailure("assembly", report.get("error", "Incomplete scene report"), "scene")
         for scene in report["scene_paths"]:
             if not safe_path(self.project, scene).is_file():
                 raise UnityFailure("assembly", "Scene report references a missing file", "scene")
+        # MCP inspection is an optional second view. The existing checked Unity
+        # assembler remains authoritative when no matching live Editor is open.
+        from studio.mcp_client import UnityMCPClient
+        client = UnityMCPClient.from_environment()
+        if client is not None:
+            try:
+                await client.connect()
+                await client.verify_project(self.project)
+                # QA uses its read-only scene facade here; the existing CLI
+                # builder and its evidence remain authoritative.
+                qa_tools = client.for_agent("qa", self.project)
+                inspected = await qa_tools.call("manage_scene", {
+                    "action": "get_hierarchy", "page_size": 200, "cursor": 0
+                })
+                log.info("Unity MCP inspected assembled job %s via QA (%d tool results)",
+                         self.job.data["id"], 1 if inspected else 0)
+            except Exception as error:
+                log.info("Unity MCP unavailable for job %s; existing Unity CLI path remains active (%s)",
+                         self.job.data["id"], type(error).__name__)
+            finally:
+                await client.close()
         return report
 
     async def tests(self, mode):
         path = safe_path(self.project, "Artifacts/" + mode + ".xml")
         path.unlink(missing_ok=True)
+        flexible = self.flexible()
+        suite = ("PromptRuntimeTests" if mode == "PlayMode" else "PromptSceneTests") if flexible else ("PlatformerTests" if mode == "PlayMode" else "AssemblyTests")
+        runtime = self.project / "Artifacts/runtime_checks.json"
+        if flexible and mode == "PlayMode":
+            runtime.unlink(missing_ok=True)
         try:
-            await self.run(mode, ["-runTests", "-testPlatform", mode, "-testResults", str(path), "-testFilter", "PlatformerTests" if mode == "PlayMode" else "AssemblyTests"], graphics=mode == "PlayMode")
+            await self.run(mode, ["-runTests", "-testPlatform", mode, "-testResults", str(path), "-testFilter", suite], graphics=mode == "PlayMode")
         except UnityFailure:
             if not path.is_file(): raise
         if not path.is_file():
             raise UnityFailure(mode, "No NUnit test results produced", "infrastructure")
-        return parse_test_report(path, mode)
+        result = parse_test_report(path, mode, expected=1 if flexible and mode == "PlayMode" else None,
+                                   suite=suite if flexible else None)
+        if flexible and mode == "PlayMode":
+            if not runtime.is_file():
+                raise UnityFailure(mode, "No fresh requirement-linked runtime evidence", "qa")
+            evidence = json.loads(runtime.read_text(encoding="utf-8"))
+            probes = json.loads((self.project / "Assets/Resources/studio_probes.json").read_text(encoding="utf-8"))["probes"]
+            checks = evidence.get("checks", [])
+            if (len(checks) != len(probes) or {c.get("id") for c in checks} != {p["id"] for p in probes}
+                    or any(c.get("passed") is not True for c in checks)):
+                raise UnityFailure(mode, "Requirement-linked runtime checks are missing or failed", "qa")
+            result["checks"] = checks
+        return result
 
     async def android(self):
         if available_space(self.project) < 5_000_000_000:
@@ -192,11 +240,13 @@ class UnityRunner:
         return {"status": "passed", "path": str(apk), "device_test": "unverified"}
 
 
-def parse_test_report(path, stage):
+def parse_test_report(path, stage, expected=None, suite=None):
     root = ET.parse(path).getroot()
     cases = root.findall(".//test-case")
     failures = [c for c in cases if c.get("result") != "Passed"]
-    expected = 10 if stage == "PlayMode" else 2
+    expected = expected if expected is not None else 10 if stage == "PlayMode" else 2
+    if suite and any(suite not in c.get("fullname", c.get("name", "")) for c in cases):
+        raise UnityFailure(stage, "NUnit results do not match the requested test suite", "qa")
     if len(cases) < expected or failures or root.get("result") not in ("Passed", "Success"):
         messages = [f"{c.get('name')}: {c.findtext('.//message', default=c.get('result', 'unknown'))}" for c in failures]
         raise UnityFailure(stage, "\n".join(messages) or f"Expected at least {expected} real tests, found {len(cases)}", "qa")

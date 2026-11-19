@@ -120,8 +120,8 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((job.directory/"UnityProject").exists())
         with self.assertRaises(RuntimeError): await self.studio.submit("another")
 
-    async def test_unrelated_or_unsupported_request_never_creates_project(self):
-        for decision,status in [({"decision":"reject","supported":False},"rejected"),({"decision":"create","supported":False},"unsupported")]:
+    async def test_unrelated_or_ambiguous_request_never_creates_project(self):
+        for decision,status in [({"decision":"reject"},"rejected"),({"decision":"clarify","reason":"Which game?"},"rejected")]:
             with patch.object(self.studio.registry,"refresh",AsyncMock()):
                 with patch("studio.supervisor.ModelService.json",AsyncMock(return_value=decision)):
                     job=await self.studio.submit("please write a poem")
@@ -141,7 +141,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(BudgetExceeded): await service.post("images",{},"art","model",.01)
             client.assert_not_called()
 
-    async def exercise_repair(self,failures):
+    async def exercise_repair(self,failures,assembly_failures=None):
         job=Job.create("platformer",2,root=self.root)
         job.data["status"]="awaiting_approval"
         job.data["tasks"]=[dict(role=r,name=n,dependencies=d,status="pending") for r,n,d in TASKS]
@@ -154,13 +154,15 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         async def fake_art(*args):
             write_json(job.directory/"art_manifest.json",[dict(kind=a.kind,path=art[a.kind],source="original procedural fallback") for a in spec.required_assets])
             return art
-        runner=SimpleNamespace(compile=AsyncMock(side_effect=failures),assemble=AsyncMock(return_value={"success":True}),tests=AsyncMock(return_value={"status":"passed"}))
+        runner=SimpleNamespace(compile=AsyncMock(side_effect=failures),assemble=AsyncMock(side_effect=assembly_failures,return_value={"success":True}),tests=AsyncMock(return_value={"status":"passed"}))
+        runner.scene_repair=AsyncMock(return_value=assemble_scenes(spec,ui,art))
         repair=AsyncMock(return_value=bundle)
         with ExitStack() as stack:
             for target,value in {
                 "Registry.refresh":AsyncMock(),
                 "bootstrap":lambda job:project,"UnityDeveloper.generate":AsyncMock(return_value=bundle),
-                "UIDesigner.plan":AsyncMock(return_value=ui),"ArtDirector.create":fake_art,
+                "GameDesigner.plan_ui":AsyncMock(return_value=ui),"ArtDesigner.create":fake_art,
+                "UnityDeveloper.repair_scenes":runner.scene_repair,
                 "validate_files":lambda *args:None,"UnityRunner":lambda *args:runner,
                 "QADebugger.repair":repair,"package":lambda *args:[job.directory/"result.zip"],
             }.items(): stack.enter_context(patch("studio.supervisor."+target,value))
@@ -177,6 +179,16 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         job,runner,repair=await self.exercise_repair([UnityFailure("compile","error CS1002") for _ in range(4)])
         self.assertEqual(job.data["status"],"failed");self.assertEqual(repair.await_count,3)
         runner.assemble.assert_not_awaited()
+
+    async def test_scene_failure_is_repaired_by_the_existing_unity_developer(self):
+        job,runner,code_repair=await self.exercise_repair(
+            [{"status":"passed"},{"status":"passed"}],
+            [UnityFailure("assembly","Missing serialized reference","scene"),{"success":True}])
+        self.assertEqual(job.data["status"],"completed")
+        runner.scene_repair.assert_awaited_once()
+        code_repair.assert_not_awaited()
+        self.assertEqual(runner.compile.await_count,2)
+        self.assertEqual(runner.assemble.await_count,2)
 
     async def test_infrastructure_error_does_not_spend_on_qa(self):
         job,runner,repair=await self.exercise_repair([UnityFailure("compile","Internal build system error","infrastructure")])

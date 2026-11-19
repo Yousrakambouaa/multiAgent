@@ -2,17 +2,21 @@ import base64
 import hashlib
 import io
 import json
+import shutil
+from types import SimpleNamespace
 
 from PIL import Image, ImageDraw
 
-from studio.config import CACHE
+from studio.config import CACHE, ROOT, safe_path
 from studio.api import ServiceRejected
 from studio.costs import BudgetExceeded
 from studio.state import JobCancelled, write_json
 
 
-class ArtDirector:
-    async def create(self, service, spec, project):
+class ArtDesigner:
+    async def create(self, service, spec, project, strict=False):
+        if getattr(spec, "version", 1) == 2:
+            return await create_flexible_art(self, service, spec, project)
         folder = project / "Assets" / "Studio" / "Art"
         folder.mkdir(parents=True, exist_ok=True)
         result = {}
@@ -86,6 +90,11 @@ class ArtDirector:
                             service.job.save()
                             break
                 if image is None:
+                    if strict:
+                        manifest.append(dict(id=asset.id, kind=asset.kind, status="unavailable", path="",
+                            source="unavailable", reason="Image provider failed or budget/capability unavailable",
+                            requirement_ids=asset.requirement_ids))
+                        continue
                     image = procedural(asset.kind, spec.palette)
                     provenance = {"source": "original procedural fallback", "license": "project-owned generated geometry",
                                   "reason": "Image service unavailable, transparency unsupported or budget insufficient", "cache_hit": False}
@@ -108,6 +117,53 @@ class ArtDirector:
             service.job.event("art", "asset_saved", asset=asset.id, source=provenance["source"])
         write_json(service.job.directory / "art_manifest.json", manifest)
         return result
+
+
+async def create_flexible_art(designer, service, spec, project):
+    """Use image endpoints only for images; import licensed native Unity assets.
+
+    Missing assets remain explicit. No platformer shapes are substituted into v2.
+    """
+    images = [a for a in spec.required_assets if a.workflow == "image"]
+    manifest = []
+    if images:
+        adapter = SimpleNamespace(required_assets=images, art_style=spec.art_style, palette=spec.palette)
+        await designer.create(service, adapter, project, strict=True)
+        manifest = json.loads((service.job.directory / "art_manifest.json").read_text(encoding="utf-8"))
+        by_id = {a.id: a for a in images}
+        for entry in manifest:
+            entry["status"] = "ready" if entry.get("path") else "unavailable"
+            entry["requirement_ids"] = by_id[entry["id"]].requirement_ids
+    suffixes = {"model": {".fbx", ".obj"}, "prefab": {".prefab"}, "audio": {".wav", ".ogg"},
+                "animation": {".anim"}, "sprite": {".png", ".jpg"}, "texture": {".png", ".jpg"}}
+    for asset in spec.required_assets:
+        if asset.workflow == "image":
+            continue
+        entry = dict(id=asset.id, kind=asset.kind, requirement_ids=asset.requirement_ids,
+                     status="unavailable", source=asset.workflow, path="", license=asset.license)
+        try:
+            if asset.workflow == "unavailable":
+                raise ValueError("No configured tool or licensed asset can produce this requested asset")
+            source = safe_path(ROOT / "asset_library", asset.library_path)
+            if not source.is_file() or source.suffix.lower() not in suffixes[asset.kind]:
+                raise ValueError("Licensed library asset is missing or is not a supported native Unity format")
+            if source.stat().st_size > 50_000_000:
+                raise ValueError("Library asset exceeds 50 MB import limit")
+            target = project / "Assets" / "Studio" / "Art" / (asset.id + source.suffix.lower())
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            # Preserve GUIDs when available, so imported prefabs can retain references.
+            if source.with_suffix(source.suffix + ".meta").is_file():
+                shutil.copy2(source.with_suffix(source.suffix + ".meta"), target.with_suffix(target.suffix + ".meta"))
+            entry.update(status="ready", path=target.relative_to(project).as_posix(),
+                         pixels_per_unit=asset.pixels_per_unit, source="licensed local library",
+                         library_path=asset.library_path)
+        except (ValueError, OSError) as error:
+            entry["reason"] = str(error)
+        manifest.append(entry)
+        service.job.event("art", "asset_" + entry["status"], asset=asset.id)
+    write_json(service.job.directory / "art_manifest.json", manifest)
+    return {entry["id"]: entry for entry in manifest}
 
 
 def procedural(kind, palette):

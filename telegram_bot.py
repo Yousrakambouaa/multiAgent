@@ -15,11 +15,11 @@ from studio.supervisor import Supervisor
 from studio.request_validation import NOISE
 
 logger=logging.getLogger(__name__)
-HELP_TEXT=("Unity Game Studio creates verified 2D platformer prototypes.\n"
+HELP_TEXT=("Unity Game Studio builds prompt-driven 2D and 3D prototypes and reports what was verified.\n"
     "/create <game description> — propose a game\n/plan — inspect the plan\n/approve — build it\n"
     "/status — progress\n/cancel — stop a job\n/budget — spending\n/result — project, report and preview\n\n"
     "Example: /create A woodland platformer with jumping, coins and patrolling enemies. "
-    "The default job cap is $2. Other game genres are not implemented in this MVP.")
+    "The default job cap is $2. Complex games or unavailable assets may produce a partial result with explicit limitations.")
 
 
 def authorized(update):
@@ -68,8 +68,10 @@ async def cancel(update,context):
 
 
 async def deliver(bot,chat_id,job):
-    if job.data["status"]!="completed":
+    if job.data["status"] not in ("completed", "partial"):
         await bot.send_message(chat_id,"No completed, verified result yet. Use /status."); return
+    if job.data["status"] == "partial":
+        await bot.send_message(chat_id,"Partial prototype: some requested work or verification remains incomplete. Read validation_report.json and requirements.json.")
     delivery={"at":now(),"status":"sending","sent":[],"skipped":[]}
     delivery_path=job.directory/"telegram_delivery.json"
     for artifact in job.data["artifacts"]:
@@ -118,7 +120,7 @@ async def handle_request(update,context,request):
     if not await guard(update): return
     request=request.strip()
     if not request or request.casefold() in NOISE or len(request)>4000:
-        await update.effective_message.reply_text("I only create Unity games. Please describe a specific 2D platformer.\nExample: /create A Mario-style platformer with coins and enemies."); return
+        await update.effective_message.reply_text("I only create Unity games. Please describe a specific game, including its mechanics and perspective.\nExample: /create A 3D driving game with a track and finish line."); return
     studio=supervisor(context)
     if context.application.bot_data.get("operation") or studio.busy():
         await update.effective_message.reply_text("An active job or plan already exists. Use /status, /approve or /cancel."); return
@@ -168,7 +170,7 @@ async def on_error(update,context):
 async def on_startup(application):
     application.bot_data["supervisor"]=Supervisor()
     try:
-        descriptions={"start":"Studio introduction","create":"Propose a platformer","status":"Current progress",
+        descriptions={"start":"Studio introduction","create":"Propose a game","status":"Current progress",
             "plan":"View game plan","approve":"Approve and build","cancel":"Cancel active job",
             "budget":"Inspect spending","result":"Get verified artifacts"}
         await application.bot.set_my_commands([BotCommand(k,v) for k,v in descriptions.items()],

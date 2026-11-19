@@ -1,6 +1,6 @@
 # Telegram Unity Studio
 
-A persistent, budgeted supervisor turns an approved platformer idea into an isolated Unity project, assembles scenes, and checks the result in the real Unity Editor. The original Unity project in `generated_game` supplies settings and packages for new projects; keep it alongside the application.
+A persistent, budgeted supervisor turns an approved prompt into an isolated Unity prototype. New requests use a versioned specification for any Unity game genre, 2D/3D/mixed scenes, explicitly requested components, multiple scripts and runtime probes. Version 1 saved platformer plans remain readable and keep their original build path. The original Unity project in `generated_game` supplies settings and packages for new projects; keep it alongside the application.
 
 ## Launch
 
@@ -30,7 +30,7 @@ Credentials, Telegram/job records, cost ledgers, model caches, Unity caches, ZIP
 4. `/status` during the build; `/cancel` to request cancellation.
 5. `/result` to retrieve the source archive, validation report, instructions, captured preview and NUnit results. Verified artifacts are also sent automatically after a successful build. An APK is included only after a successful Android build and archive integrity check.
 
-`/start` introduces the bot; `/myid` reports the sender's own Telegram ID. Every command that reads or changes jobs checks the configured authorized user ID. Plain game requests use the same workflow. `tt` is rejected without an API call. Unrelated requests are rejected, and vague requests ask for a specific game. Other genres are explicitly unsupported by this MVP, rather than silently becoming platformers.
+`/start` introduces the bot; `/myid` reports the sender's own Telegram ID. Every command that reads or changes jobs checks the configured authorized user ID. Plain game requests use the same workflow. `tt` is rejected without an API call. Unrelated requests are rejected, and vague requests ask for details that would change the game. The plan lists prompt requirements, assumptions, tasks and known limitations before approval.
 
 ## CLI
 
@@ -59,28 +59,80 @@ Credentials, Telegram/job records, cost ledgers, model caches, Unity caches, ZIP
 
 CLI `--android` enables the Android development build. For Telegram, set `STUDIO_BUILD_ANDROID=1` before starting the bot. Unity's Android SDK, NDK and JDK must be installed. The APK is for development; signing for publication and installation/device testing are separate, unverified steps.
 
+## Optional Unity MCP
+
+The existing Unity CLI remains the normal compile, scene-build, test and APK path. MCP is disabled by default. To enable the optional connector, install **MCP for Unity** in each job project you intend to inspect (`jobs/<id>/UnityProject`): in Unity, open Package Manager and add `https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#v10.3.0`. Open that same project with Unity 2021.3 or newer, choose **Window → MCP for Unity**, and start its bridge. The current configured Unity version is Unity 6.
+
+The connector starts the matching Python server over stdio with this command (it is launched automatically by the app; do not start a second copy):
+
+```powershell
+uvx --from mcpforunityserver==10.3.0 mcp-for-unity
+```
+
+`uv`/`uvx` and Python 3.10+ must be installed. Set these optional values in `.env`:
+
+```dotenv
+STUDIO_UNITY_MCP_ENABLED=1
+STUDIO_UNITY_MCP_COMMAND=uvx
+STUDIO_UNITY_MCP_ARGS_JSON='["--from","mcpforunityserver==10.3.0","mcp-for-unity"]'
+STUDIO_UNITY_MCP_TIMEOUT=20
+```
+
+Stop the Telegram bot first because the CLI and bot share a single-controller lock. With Unity open on the current job's project, check tool discovery and exercise the disposable scene create/inspect/cleanup path:
+
+```powershell
+.\.venv\Scripts\python.exe main.py mcp-status
+.\.venv\Scripts\python.exe main.py mcp-smoke
+```
+
+Then start the Telegram application normally:
+
+```powershell
+.\.venv\Scripts\python.exe telegram_bot.py
+```
+
+The app discovers the server's live tool list and exposes role-limited Python tool facades to the five existing roles. Supervisor and Game Designer can inspect; Unity Developer can create scenes/GameObjects/components and search/create/import project assets; Art Designer can search/create/import assets; QA can inspect scenes, read the console, validate scripts and request tests. The wrapper excludes arbitrary code/menu execution and confines asset paths to the target project's `Assets` folder. Tool calls are made by trusted orchestration, so game-prompt text is not a command or raw tool argument. The current CrewAI and AutoGen model adapters remain on their existing metered JSON path; they do not advertise model-selected function calling.
+
+`mcp-smoke` creates a disposable scene and cube, adds a Rigidbody, creates a temporary material, checks the scene hierarchy/GameObject and reads console errors, then restores the original scene and removes its temporary assets. It refuses to run if the original scene is dirty, multiple scenes are loaded, or the probe paths/names already exist.
+
+During normal generation, the current deterministic Unity CLI assembler and its evidence stay authoritative. When MCP is enabled and the matching Editor is reachable after assembly, the pipeline adds a read-only QA scene inspection; connection failures are logged and the CLI result remains unchanged. `mcp-smoke` is the explicit MCP scene-creation check. Installing the Unity package is project-specific; it is not injected into `generated_game` or existing game folders automatically.
+
 ## Architecture
 
 | Module | Responsibility |
 | --- | --- |
 | `telegram_bot.py` | Authorization, commands, background operations, progress and artifact delivery |
 | `studio/supervisor.py` | Task graph, plan approval, persistent state, specialist handoffs, bounded repair loop |
-| `studio/schemas.py` | Strict GameSpec, SceneBundle, SceneSpec, UIPlan and C# bundle validation |
+| `studio/schemas.py`, `studio/flexible.py` | Version 1 platformer compatibility and version 2 genre-neutral GameSpec, assets, tasks, scene/component contracts, probes, trace and evidence |
 | `studio/registry.py`, `studio_models.json` | Live model availability/capability/pricing lookup; explicit primary/fallback allowlists |
 | `studio/api.py`, `studio/costs.py` | Shared OpenRouter gateway, pre-call reservations, reported charges, conservative unknown-charge estimates |
-| `studio/agents.py`, `studio/frameworks.py` | Designer, developer, UI, scene and QA specialists; metered CrewAI and AutoGen adapters |
+| `studio/agents.py`, `studio/frameworks.py` | Game Designer, Unity Developer and QA/Debugger; metered CrewAI and AutoGen adapters |
 | `studio/assets.py` | Real Image API calls, PNG validation/resizing, alpha checks, cache, provenance and original procedural fallback |
 | `studio/scenes.py` | Deterministic Scene Architect compilation from the shared game/UI/art specifications |
 | `studio/templates/Runtime` | Complete reusable platformer physics, input, scoring, enemies, camera, menus and touch controls |
 | `studio/templates/Editor` | General scene/component/property/reference assembly, sprite import, prefabs, build settings and Android build |
 | `studio/templates/Tests` | Real Unity EditMode and PlayMode suites |
 | `studio/unity.py` | Fixed Unity CLI invocations, cancellation/timeouts, fresh evidence and NUnit parsing |
+| `studio/mcp_client.py` | Optional MCP stdio client, live tool discovery, five-role allowlists, Unity project/path checks and disposable smoke test |
 | `studio/artifacts.py` | Source packaging, reports, artifact hashes and verified-APK filtering |
 | `studio/verification.py` | Local re-verification without additional model calls |
+| `studio/generation.py` | Version 2 job execution, bounded script/asset validation and requirement reports |
+| `studio/templates/Editor/UniversalSceneBuilder.cs` | Explicit 2D/3D/mixed scene construction with supplied components, meshes, cameras, lighting, prefabs and materials |
+| `studio/templates/Tests/PlayMode/PromptRuntimeTests.cs` | Runs plan-linked control and gameplay probes and writes fresh runtime evidence |
+
+The studio has exactly five agent identities, registered in `Supervisor.agents`:
+
+1. **Supervisor** coordinates tasks, model selection, spending, progress and delivery.
+2. **Game Designer** plans gameplay, levels, mechanics and UI requirements, including `UIPlan`.
+3. **Unity Developer** generates scripts, assembles scenes/UI/components using tools, and repairs scene specifications.
+4. **Art Designer** generates sprites, textures, backgrounds and other visual assets.
+5. **QA & Debugger** handles validation findings, compiler/runtime diagnostics and code repairs.
+
+UI Designer and Scene Architect are no longer separate agents. The existing `ui` and `scene` keys in `studio_models.json` remain model task profiles owned by Game Designer and Unity Developer respectively; their model IDs, fallbacks and request limits are unchanged. `AGENT_MODEL_PROFILES` documents this ownership. Compilation, scene building, testing, packaging and APK building remain deterministic tools. The existing `service.json`/`service.post` boundary remains available for a future provider adapter; no new external API is integrated.
 
 Default planning uses CrewAI with a custom metered LLM. Default QA repair uses AutoGen with a custom metered model client. They cannot access API credentials or bypass the shared ledger. `STUDIO_DESIGNER_BACKEND=direct` and `STUDIO_QA_BACKEND=direct` select the simpler structured handoff implementation. There are no free-form specialist conversations or unrestricted shell tools.
 
-The developer generates `GeneratedRules.cs` against a fixed, complete runtime contract. Core movement and UI use maintained templates so a small model does not repeatedly invent physics or dependencies. The scene assembler resolves component types and actual serialized/public property metadata; it does not assume every game has scripts called `PlayerMovement` or `CoinController`. New genres need new verified runtime adapters and tests.
+New version 2 jobs generate multiple named C# components and explicit scene descriptions. The builder does not inject a player, camera, floor, coins, menu or particular physics system. A scene must specify its camera, lighting for 3D, gameplay objects, components and references. Tests load each named scene, execute key/invoke/click steps, check runtime state and save machine-readable evidence linked to requirement IDs. Existing version 1 platformer jobs continue using their maintained runtime and deterministic scene builder. Generated C# is scope-checked and still must compile and pass Unity tests; this is not a security sandbox for malicious code.
 
 Each job lives in `jobs/<id>/`, including a self-contained `UnityProject`, specifications, append-only event log, cost ledger, generated files, Unity logs and validation evidence. `jobs/current.txt` records the current job. After an interrupted process, an existing plan can be retried with `/approve`; its ledger remains charged and generated images can reuse cache. In-flight calls with unknown billing retain their reservations. A global Unity-job lock prevents overlapping builds, in addition to isolated projects.
 
@@ -94,9 +146,11 @@ Model IDs and fallbacks are explicit configuration in `studio_models.json`. Run 
 
 The pipeline requires validated specs and existing files, C# compilation, explicit assembly evidence, two EditMode tests and ten PlayMode tests. A zero Unity exit code or an empty/skipped NUnit report cannot pass. Runtime tests exercise spawning, horizontal motion, jumping, double-jump prevention, landing/ground detection, coin collision and scoring, assigned references, sprite presence, touch-button movement, menu-to-level and exit-to-results transitions, collision rules and preview rendering. Runtime exceptions fail tests.
 
-The initial run plus at most three repair rounds is allowed. Actual scene errors route to Scene Architect; generated-code and gameplay errors route to QA/coding. Every repair re-runs compilation, assembly and affected tests. Infrastructure/template failures stop explicitly rather than spending on an unrelated generated script. Failed jobs retain diagnostics and never deliver an unverified result as completed.
+The initial run plus at most three repair rounds is allowed. Actual scene errors route to Unity Developer; generated-code and gameplay errors route to QA/coding. Every repair re-runs compilation, assembly and affected tests. Infrastructure/template failures stop explicitly rather than spending on an unrelated generated script. Failed jobs retain diagnostics and never deliver an unverified result as completed.
 
-Not all gameplay is tested: enemy stomping, full level traversal, physical touchscreen behavior, multiple-level progression, accessibility and aesthetic quality still need review. The automatic screenshot is evidence of the rendered scene, not an artistic-quality verdict. No device install or publication happens automatically.
+Requirements that have runtime probes are reported passed only when Unity supplies fresh matching evidence. Visual requirements require manual review. The planner and QA agent record unanswered requirements, unavailable assets, unsupported expectations and other limitations; those keep the result partial. The image service can make sprites and textures, but cannot make 3D models, audio, animation or complete prefab packages. Such requests need licensed files in the optional local `asset_library/` folder or remain explicitly unavailable. The builder can make described procedural geometry and materials; it does not provide a universal asset marketplace. The automatic screenshot is evidence of the rendered scene, not an artistic-quality verdict. No device install or publication happens automatically.
+
+The included platformer, 3D racing and puzzle fixtures in `tests/game_examples.py` are deterministic contract examples. They do not represent paid live-model outputs. To validate an actual generated request, approve it and run its Unity compilation, scene assembly and plan-linked PlayMode probes; each job records the exact results. Unity runs need available disk space (a new isolated copy currently requires at least 1.5 GB).
 
 ## Art service status
 

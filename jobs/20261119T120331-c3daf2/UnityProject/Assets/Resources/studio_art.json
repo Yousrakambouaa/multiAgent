@@ -1,0 +1,76 @@
+{
+  "assets": [
+    {
+      "id": "player_frog",
+      "kind": "player",
+      "path": "Assets/Studio/Art/player_frog.png",
+      "width": 256,
+      "height": 256,
+      "pixels_per_unit": 128,
+      "source": "original procedural fallback",
+      "license": "project-owned generated geometry",
+      "reason": "Image service unavailable, transparency unsupported or budget insufficient",
+      "cache_hit": false
+    },
+    {
+      "id": "ice_ground",
+      "kind": "ground",
+      "path": "Assets/Studio/Art/ice_ground.png",
+      "width": 256,
+      "height": 256,
+      "pixels_per_unit": 128,
+      "source": "original procedural fallback",
+      "license": "project-owned generated geometry",
+      "reason": "Image service unavailable, transparency unsupported or budget insufficient",
+      "cache_hit": false
+    },
+    {
+      "id": "apple_coin",
+      "kind": "coin",
+      "path": "Assets/Studio/Art/apple_coin.png",
+      "width": 256,
+      "height": 256,
+      "pixels_per_unit": 128,
+      "source": "original procedural fallback",
+      "license": "project-owned generated geometry",
+      "reason": "Image service unavailable, transparency unsupported or budget insufficient",
+      "cache_hit": false
+    },
+    {
+      "id": "crab_enemy",
+      "kind": "enemy",
+      "path": "Assets/Studio/Art/crab_enemy.png",
+      "width": 256,
+      "height": 256,
+      "pixels_per_unit": 128,
+      "source": "original procedural fallback",
+      "license": "project-owned generated geometry",
+      "reason": "Image service unavailable, transparency unsupported or budget insufficient",
+      "cache_hit": false
+    },
+    {
+      "id": "beach_sunset",
+      "kind": "background",
+      "path": "Assets/Studio/Art/beach_sunset.png",
+      "width": 1280,
+      "height": 720,
+      "pixels_per_unit": 128,
+      "source": "original procedural fallback",
+      "license": "project-owned generated geometry",
+      "reason": "Image service unavailable, transparency unsupported or budget insufficient",
+      "cache_hit": false
+    },
+    {
+      "id": "exit_flag",
+      "kind": "decoration",
+      "path": "Assets/Studio/Art/exit_flag.png",
+      "width": 256,
+      "height": 256,
+      "pixels_per_unit": 128,
+      "source": "original procedural fallback",
+      "license": "project-owned generated geometry",
+      "reason": "Image service unavailable, transparency unsupported or budget insufficient",
+      "cache_hit": false
+    }
+  ]
+}

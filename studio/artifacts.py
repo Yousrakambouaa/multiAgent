@@ -8,9 +8,11 @@ from studio.state import write_json
 def package(job, project, report):
     report_path = job.directory / "validation_report.json"
     write_json(report_path, report)
-    readme = (f"{job.data['id']}\n\nOpen UnityProject in Unity Hub using Unity 6000.3.24f1.\n"
+    spec = json.loads((job.directory / "game_spec.json").read_text(encoding="utf-8"))
+    controls = "\n".join(spec.get("controls", [])) if spec.get("version") == 2 else "Arrow keys or A/D: move. Space: jump. Touch buttons are on screen."
+    readme = (f"{job.data['id']}\nStatus: {report.get('completion_status', 'completed')}\n\nOpen UnityProject in Unity Hub using Unity 6000.3.24f1.\n"
               "Open the first scene in Assets/Studio/Scenes and press Play.\n"
-              "Arrow keys or A/D: move. Space: jump. Touch buttons are on screen.\n\n"
+              + controls + "\n\n"
               "Read validation_report.json for actual test scope and limitations.\n")
     (job.directory / "PLAY.txt").write_text(readme, encoding="utf-8")
     archive_path = job.directory / "unity_prototype.zip"
@@ -21,7 +23,9 @@ def package(job, project, report):
                     archive.write(path, "UnityProject/" + path.relative_to(project).as_posix())
         for name in ("validation_report.json", "game_spec.json", "scene_spec.json", "ui_plan.json", "art_manifest.json", "PLAY.txt"):
             archive.write(job.directory / name, name)
-        archive.writestr("job.json",json.dumps(dict(job.data,status="completed"),indent=2))
+        for name in ("requirements.json", "implementation.json", "qa_review.json"):
+            if (job.directory / name).is_file(): archive.write(job.directory / name, name)
+        archive.writestr("job.json",json.dumps(dict(job.data,status=report.get("completion_status","completed")),indent=2))
     artifacts = [archive_path, report_path, job.directory / "PLAY.txt"]
     for filename in ("preview.png", "prototype.apk", "EditMode.xml", "PlayMode.xml"):
         path = project / "Artifacts" / filename

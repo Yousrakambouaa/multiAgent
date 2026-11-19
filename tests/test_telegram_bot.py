@@ -30,7 +30,7 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
     async def test_tt_never_triggers_job_or_api(self):
         await bot.handle_request(self.update,self.context,"tt")
         self.studio.submit.assert_not_called(); self.assertEqual(self.tasks,[])
-        self.assertIn("specific 2D platformer",self.message.reply_text.await_args.args[0])
+        self.assertIn("specific game",self.message.reply_text.await_args.args[0])
 
     async def test_authorized_request_runs_in_background_and_waits_for_approval(self):
         await bot.handle_request(self.update,self.context,"Make a Mario-like platformer")
