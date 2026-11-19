@@ -1,0 +1,51 @@
+# Python environment, credentials and machine-local state
+/.venv/
+/.env
+/.env.*
+!/.env.example
+__pycache__/
+*.py[cod]
+/.logs/
+/.studio_cache/
+/.vscode/
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.key
+
+# Keep the base Unity project's source, packages and settings only.
+/generated_game/*
+!/generated_game/Assets/
+!/generated_game/Packages/
+!/generated_game/ProjectSettings/
+
+# Keep generated Unity source projects, but not chat/job records or build outputs.
+/jobs/*
+!/jobs/README.md
+!/jobs/*/
+/jobs/*/*
+!/jobs/*/UnityProject/
+/jobs/*/UnityProject/*
+!/jobs/*/UnityProject/Assets/
+!/jobs/*/UnityProject/Packages/
+!/jobs/*/UnityProject/ProjectSettings/
+
+# Unity-generated local state and compiled installers
+**/[Ll]ibrary/
+**/[Tt]emp/
+**/[Oo]bj/
+**/[Ll]ogs/
+**/[Uu]ser[Ss]ettings/
+*.csproj
+*.sln
+*.slnx
+*.apk
+*.aab
+*.log
+
+# Temporary model research snapshots
+/model_catalog.json
+/image_model_catalog.json
+/*_endpoints.json

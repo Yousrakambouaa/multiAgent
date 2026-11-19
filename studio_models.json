@@ -1,0 +1,9 @@
+{
+  "supervisor": ["~deepseek/deepseek-v4-flash-latest", "deepseek/deepseek-v4.1-flash"],
+  "designer": ["~deepseek/deepseek-v4-flash-latest", "deepseek/deepseek-v4.1-flash"],
+  "developer": ["qwen/qwen3-coder-flash", "qwen/qwen3-coder-30b-a3b-instruct"],
+  "scene": ["qwen/qwen3-coder-flash", "qwen/qwen3-coder-30b-a3b-instruct"],
+  "qa": ["qwen/qwen3-coder-flash", "qwen/qwen3-coder-30b-a3b-instruct"],
+  "ui": ["~deepseek/deepseek-v4-flash-latest", "deepseek/deepseek-v4.1-flash"],
+  "art": ["recraft/recraft-v4.1-flash", "bytedance-seed/seedream-5-0-flash", "black-forest-labs/flux.2-klein-4b"]
+}

@@ -1,0 +1,865 @@
+{
+  "version": 1,
+  "title": "Coin Collector",
+  "orientation": "landscape",
+  "palette": [
+    "#0000FF",
+    "#00FF00",
+    "#FFFF00",
+    "#FFFFFF",
+    "#FF0000"
+  ],
+  "scenes": [
+    {
+      "name": "MainMenu",
+      "kind": "menu",
+      "background_color": "#0000FF",
+      "camera_size": 6,
+      "objects": [
+        {
+          "id": "director",
+          "name": "Game Director",
+          "role": "controller",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Studio.Runtime.GameDirector",
+              "properties": [
+                {
+                  "name": "title",
+                  "kind": "string",
+                  "value": "Coin Collector"
+                },
+                {
+                  "name": "subtitle",
+                  "kind": "string",
+                  "value": "Collect all coins and reach the flag!"
+                },
+                {
+                  "name": "firstScene",
+                  "kind": "string",
+                  "value": "Level1"
+                },
+                {
+                  "name": "menuScene",
+                  "kind": "string",
+                  "value": "MainMenu"
+                },
+                {
+                  "name": "resultScene",
+                  "kind": "string",
+                  "value": "Results"
+                },
+                {
+                  "name": "sceneKind",
+                  "kind": "string",
+                  "value": "menu"
+                },
+                {
+                  "name": "playLabel",
+                  "kind": "string",
+                  "value": "Play"
+                },
+                {
+                  "name": "touchButtonSize",
+                  "kind": "int",
+                  "value": "120"
+                },
+                {
+                  "name": "referenceWidth",
+                  "kind": "int",
+                  "value": "1280"
+                },
+                {
+                  "name": "referenceHeight",
+                  "kind": "int",
+                  "value": "720"
+                },
+                {
+                  "name": "accentColor",
+                  "kind": "color",
+                  "value": "#FFFF00"
+                },
+                {
+                  "name": "nextScene",
+                  "kind": "string",
+                  "value": "Results"
+                }
+              ]
+            },
+            {
+              "type": "GeneratedRules",
+              "properties": []
+            }
+          ]
+        },
+        {
+          "id": "backdrop",
+          "name": "Forest backdrop",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            2.0,
+            5.0
+          ],
+          "scale": [
+            24.0,
+            13.5,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "Assets/Studio/Art/background.png",
+          "color": "#FFFFFF",
+          "sorting_order": -20,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Studio.Runtime.ParallaxBackdrop",
+              "properties": [
+                {
+                  "name": "factor",
+                  "kind": "float",
+                  "value": "1.0"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Level1",
+      "kind": "level",
+      "background_color": "#0000FF",
+      "camera_size": 6,
+      "objects": [
+        {
+          "id": "director",
+          "name": "Game Director",
+          "role": "controller",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Studio.Runtime.GameDirector",
+              "properties": [
+                {
+                  "name": "title",
+                  "kind": "string",
+                  "value": "Coin Collector"
+                },
+                {
+                  "name": "subtitle",
+                  "kind": "string",
+                  "value": "Collect all coins and reach the flag!"
+                },
+                {
+                  "name": "firstScene",
+                  "kind": "string",
+                  "value": "Level1"
+                },
+                {
+                  "name": "menuScene",
+                  "kind": "string",
+                  "value": "MainMenu"
+                },
+                {
+                  "name": "resultScene",
+                  "kind": "string",
+                  "value": "Results"
+                },
+                {
+                  "name": "sceneKind",
+                  "kind": "string",
+                  "value": "level"
+                },
+                {
+                  "name": "playLabel",
+                  "kind": "string",
+                  "value": "Play"
+                },
+                {
+                  "name": "touchButtonSize",
+                  "kind": "int",
+                  "value": "120"
+                },
+                {
+                  "name": "referenceWidth",
+                  "kind": "int",
+                  "value": "1280"
+                },
+                {
+                  "name": "referenceHeight",
+                  "kind": "int",
+                  "value": "720"
+                },
+                {
+                  "name": "accentColor",
+                  "kind": "color",
+                  "value": "#FFFF00"
+                },
+                {
+                  "name": "nextScene",
+                  "kind": "string",
+                  "value": "Results"
+                }
+              ]
+            },
+            {
+              "type": "GeneratedRules",
+              "properties": []
+            }
+          ]
+        },
+        {
+          "id": "backdrop",
+          "name": "Forest backdrop",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            2.0,
+            5.0
+          ],
+          "scale": [
+            24.0,
+            13.5,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "Assets/Studio/Art/background.png",
+          "color": "#FFFFFF",
+          "sorting_order": -20,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Studio.Runtime.ParallaxBackdrop",
+              "properties": [
+                {
+                  "name": "factor",
+                  "kind": "float",
+                  "value": "1.0"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "ground",
+          "name": "Ground",
+          "role": "ground",
+          "parent": "",
+          "position": [
+            15.0,
+            -1.0,
+            0.0
+          ],
+          "scale": [
+            42.0,
+            1.5,
+            1.0
+          ],
+          "tag": "Ground",
+          "layer": 8,
+          "sprite": "Assets/Studio/Art/ground.png",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.BoxCollider2D",
+              "properties": []
+            }
+          ]
+        },
+        {
+          "id": "player",
+          "name": "Explorer",
+          "role": "player",
+          "parent": "",
+          "position": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            1.15,
+            1.0
+          ],
+          "tag": "Player",
+          "layer": 9,
+          "sprite": "Assets/Studio/Art/player.png",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": true,
+          "components": [
+            {
+              "type": "UnityEngine.Rigidbody2D",
+              "properties": [
+                {
+                  "name": "gravityScale",
+                  "kind": "float",
+                  "value": "2.5"
+                },
+                {
+                  "name": "freezeRotation",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "UnityEngine.BoxCollider2D",
+              "properties": []
+            },
+            {
+              "type": "Studio.Runtime.PlayerMotor",
+              "properties": [
+                {
+                  "name": "moveSpeed",
+                  "kind": "float",
+                  "value": "6.0"
+                },
+                {
+                  "name": "jumpSpeed",
+                  "kind": "float",
+                  "value": "11.0"
+                },
+                {
+                  "name": "director",
+                  "kind": "reference",
+                  "value": "director:Studio.Runtime.GameDirector"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "platform0",
+          "name": "Grass ledge 1",
+          "role": "platform",
+          "parent": "",
+          "position": [
+            4.0,
+            0.8,
+            0.0
+          ],
+          "scale": [
+            3.0,
+            0.45,
+            1.0
+          ],
+          "tag": "Ground",
+          "layer": 8,
+          "sprite": "Assets/Studio/Art/ground.png",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.BoxCollider2D",
+              "properties": []
+            }
+          ]
+        },
+        {
+          "id": "platform1",
+          "name": "Grass ledge 2",
+          "role": "platform",
+          "parent": "",
+          "position": [
+            13.0,
+            2.0,
+            0.0
+          ],
+          "scale": [
+            3.0,
+            0.45,
+            1.0
+          ],
+          "tag": "Ground",
+          "layer": 8,
+          "sprite": "Assets/Studio/Art/ground.png",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.BoxCollider2D",
+              "properties": []
+            }
+          ]
+        },
+        {
+          "id": "platform2",
+          "name": "Grass ledge 3",
+          "role": "platform",
+          "parent": "",
+          "position": [
+            22.0,
+            0.8,
+            0.0
+          ],
+          "scale": [
+            3.0,
+            0.45,
+            1.0
+          ],
+          "tag": "Ground",
+          "layer": 8,
+          "sprite": "Assets/Studio/Art/ground.png",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.BoxCollider2D",
+              "properties": []
+            }
+          ]
+        },
+        {
+          "id": "coin0",
+          "name": "Coin 1",
+          "role": "coin",
+          "parent": "",
+          "position": [
+            2.0,
+            0.8,
+            0.0
+          ],
+          "scale": [
+            0.4,
+            0.4,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "Assets/Studio/Art/coin.png",
+          "color": "#FFFFFF",
+          "sorting_order": 2,
+          "prefab": true,
+          "components": [
+            {
+              "type": "UnityEngine.CircleCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "Studio.Runtime.CoinPickup",
+              "properties": [
+                {
+                  "name": "director",
+                  "kind": "reference",
+                  "value": "director:Studio.Runtime.GameDirector"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "coin1",
+          "name": "Coin 2",
+          "role": "coin",
+          "parent": "",
+          "position": [
+            8.2,
+            0.8,
+            0.0
+          ],
+          "scale": [
+            0.4,
+            0.4,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "Assets/Studio/Art/coin.png",
+          "color": "#FFFFFF",
+          "sorting_order": 2,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.CircleCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "Studio.Runtime.CoinPickup",
+              "properties": [
+                {
+                  "name": "director",
+                  "kind": "reference",
+                  "value": "director:Studio.Runtime.GameDirector"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "coin2",
+          "name": "Coin 3",
+          "role": "coin",
+          "parent": "",
+          "position": [
+            14.4,
+            0.8,
+            0.0
+          ],
+          "scale": [
+            0.4,
+            0.4,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "Assets/Studio/Art/coin.png",
+          "color": "#FFFFFF",
+          "sorting_order": 2,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.CircleCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "Studio.Runtime.CoinPickup",
+              "properties": [
+                {
+                  "name": "director",
+                  "kind": "reference",
+                  "value": "director:Studio.Runtime.GameDirector"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "coin3",
+          "name": "Coin 4",
+          "role": "coin",
+          "parent": "",
+          "position": [
+            20.6,
+            0.8,
+            0.0
+          ],
+          "scale": [
+            0.4,
+            0.4,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "Assets/Studio/Art/coin.png",
+          "color": "#FFFFFF",
+          "sorting_order": 2,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.CircleCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "Studio.Runtime.CoinPickup",
+              "properties": [
+                {
+                  "name": "director",
+                  "kind": "reference",
+                  "value": "director:Studio.Runtime.GameDirector"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "coin4",
+          "name": "Coin 5",
+          "role": "coin",
+          "parent": "",
+          "position": [
+            26.8,
+            0.8,
+            0.0
+          ],
+          "scale": [
+            0.4,
+            0.4,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "Assets/Studio/Art/coin.png",
+          "color": "#FFFFFF",
+          "sorting_order": 2,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.CircleCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "Studio.Runtime.CoinPickup",
+              "properties": [
+                {
+                  "name": "director",
+                  "kind": "reference",
+                  "value": "director:Studio.Runtime.GameDirector"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "exit",
+          "name": "Finish beacon",
+          "role": "exit",
+          "parent": "",
+          "position": [
+            33.0,
+            1.2,
+            0.0
+          ],
+          "scale": [
+            0.6,
+            2.7,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "Assets/Studio/Art/coin.png",
+          "color": "#FFFF00",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.BoxCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "Studio.Runtime.LevelExit",
+              "properties": [
+                {
+                  "name": "director",
+                  "kind": "reference",
+                  "value": "director:Studio.Runtime.GameDirector"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Results",
+      "kind": "result",
+      "background_color": "#0000FF",
+      "camera_size": 6,
+      "objects": [
+        {
+          "id": "director",
+          "name": "Game Director",
+          "role": "controller",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Studio.Runtime.GameDirector",
+              "properties": [
+                {
+                  "name": "title",
+                  "kind": "string",
+                  "value": "Coin Collector"
+                },
+                {
+                  "name": "subtitle",
+                  "kind": "string",
+                  "value": "Collect all coins and reach the flag!"
+                },
+                {
+                  "name": "firstScene",
+                  "kind": "string",
+                  "value": "Level1"
+                },
+                {
+                  "name": "menuScene",
+                  "kind": "string",
+                  "value": "MainMenu"
+                },
+                {
+                  "name": "resultScene",
+                  "kind": "string",
+                  "value": "Results"
+                },
+                {
+                  "name": "sceneKind",
+                  "kind": "string",
+                  "value": "result"
+                },
+                {
+                  "name": "playLabel",
+                  "kind": "string",
+                  "value": "Play"
+                },
+                {
+                  "name": "touchButtonSize",
+                  "kind": "int",
+                  "value": "120"
+                },
+                {
+                  "name": "referenceWidth",
+                  "kind": "int",
+                  "value": "1280"
+                },
+                {
+                  "name": "referenceHeight",
+                  "kind": "int",
+                  "value": "720"
+                },
+                {
+                  "name": "accentColor",
+                  "kind": "color",
+                  "value": "#FFFF00"
+                },
+                {
+                  "name": "nextScene",
+                  "kind": "string",
+                  "value": "Results"
+                }
+              ]
+            },
+            {
+              "type": "GeneratedRules",
+              "properties": []
+            }
+          ]
+        },
+        {
+          "id": "backdrop",
+          "name": "Forest backdrop",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            2.0,
+            5.0
+          ],
+          "scale": [
+            24.0,
+            13.5,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "Assets/Studio/Art/background.png",
+          "color": "#FFFFFF",
+          "sorting_order": -20,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Studio.Runtime.ParallaxBackdrop",
+              "properties": [
+                {
+                  "name": "factor",
+                  "kind": "float",
+                  "value": "1.0"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "collision_rules": [
+    {
+      "layer_a": 9,
+      "layer_b": 9,
+      "ignore": true
+    }
+  ]
+}

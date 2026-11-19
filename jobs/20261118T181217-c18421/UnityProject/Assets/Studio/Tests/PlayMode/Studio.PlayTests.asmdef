@@ -1,0 +1,1 @@
+{"name":"Studio.PlayTests","references":["Studio.Runtime","UnityEngine.UI"],"optionalUnityReferences":["TestAssemblies"],"defineConstraints":["UNITY_INCLUDE_TESTS"]}
