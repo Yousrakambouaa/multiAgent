@@ -1,0 +1,40 @@
+{
+  "assets": [
+    {
+      "id": "frog_model",
+      "kind": "model",
+      "requirement_ids": [
+        "R1"
+      ],
+      "status": "unavailable",
+      "source": "unavailable",
+      "path": "",
+      "license": "",
+      "reason": "No configured tool or licensed asset can produce this requested asset"
+    },
+    {
+      "id": "grass_ground",
+      "kind": "model",
+      "requirement_ids": [
+        "R2"
+      ],
+      "status": "unavailable",
+      "source": "unavailable",
+      "path": "",
+      "license": "",
+      "reason": "No configured tool or licensed asset can produce this requested asset"
+    },
+    {
+      "id": "apple_model",
+      "kind": "model",
+      "requirement_ids": [
+        "R3"
+      ],
+      "status": "unavailable",
+      "source": "unavailable",
+      "path": "",
+      "license": "",
+      "reason": "No configured tool or licensed asset can produce this requested asset"
+    }
+  ]
+}

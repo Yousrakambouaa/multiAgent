@@ -16,7 +16,7 @@ from studio.request_validation import NOISE
 
 logger=logging.getLogger(__name__)
 HELP_TEXT=("Unity Game Studio builds prompt-driven 2D and 3D prototypes and reports what was verified.\n"
-    "/create <game description> — propose a game\n/plan — inspect the plan\n/approve — build it\n"
+    "/create <game description> — create a plan\n/plan — inspect the plan\n/approve — start Unity generation\n"
     "/status — progress\n/cancel — stop a job\n/budget — spending\n/result — project, report and preview\n\n"
     "Example: /create A woodland platformer with jumping, coins and patrolling enemies. "
     "The default job cap is $2. Complex games or unavailable assets may produce a partial result with explicit limitations.")
@@ -49,8 +49,12 @@ async def status(update,context):
     if not job:
         await update.effective_message.reply_text("Online. No job yet. Use /create <description>."); return
     tasks="\n".join(f"{task['name']}: {task['status']}" for task in job.data["tasks"])
+    pending=[item["text"] for item in job.data.get("additional_instructions",[]) if item.get("status")=="pending_approval"]
+    queued=[item["text"] for item in job.data.get("additional_instructions",[]) if item.get("status")=="queued"]
+    update_text=("\nWill apply when you /approve:\n"+"\n".join(pending) if pending else "")
+    if queued: update_text += "\nQueued for a follow-up (not applied to current build):\n"+"\n".join(queued)
     await update.effective_message.reply_text((f"Job {job.data['id']}\nStatus: {job.data['status']}\nStage: {job.data['stage']}\n"
-        f"{tasks}\n{job.data.get('error','')}")[:3900])
+        f"{tasks}\n{job.data.get('error','')}{update_text}")[:3900])
 
 
 async def plan(update,context):
@@ -116,24 +120,45 @@ async def operation(update,context,callback):
         context.application.bot_data.pop("operation",None)
 
 
-async def handle_request(update,context,request):
+async def handle_request(update,context,request,explicit_create=False):
     if not await guard(update): return
     request=request.strip()
     if not request or request.casefold() in NOISE or len(request)>4000:
         await update.effective_message.reply_text("I only create Unity games. Please describe a specific game, including its mechanics and perspective.\nExample: /create A 3D driving game with a track and finish line."); return
     studio=supervisor(context)
+    # Older versions stored a rejected job after asking a question. Reattach a
+    # plain-text answer to that exact request instead of starting from the answer
+    # alone and falling into another clarification cycle.
+    previous=studio.job
+    if (not explicit_create and previous and previous.data.get("status")=="rejected"
+            and "clarif" in previous.data.get("error","").casefold()):
+        request=(previous.data.get("request","")+"\n\nUser clarification: "+request).strip()
+        if len(request)>4000:
+            await update.effective_message.reply_text("I found your previous game request, but it plus this answer exceeds 4,000 characters. Use /create with a shorter combined description."); return
+        explicit_create=True
+        await update.effective_message.reply_text("Using your answer with the saved game request and starting generation.")
     if context.application.bot_data.get("operation") or studio.busy():
-        await update.effective_message.reply_text("An active job or plan already exists. Use /status, /approve or /cancel."); return
+        job=studio.job
+        if job and job.data.get("status") in ("planning","building","awaiting_approval","interrupted"):
+            await update.effective_message.reply_text(studio.add_instruction(request)); return
+        if context.application.bot_data.get("operation") and (not job or job.data.get("status") not in ("planning","building","awaiting_approval","interrupted")):
+            context.application.bot_data.setdefault("pre_job_instructions",[]).append(request)
+            await update.effective_message.reply_text("Saved this instruction for the game creation that is starting."); return
+        await update.effective_message.reply_text("An active job already exists. Use /status or /cancel."); return
     context.application.bot_data["operation"]=True
     async def work():
-        await studio.submit(request,chat_id=update.effective_chat.id,notify=update.effective_message.reply_text)
+        initial=context.application.bot_data.pop("pre_job_instructions",[])
+        await studio.submit(request,chat_id=update.effective_chat.id,notify=update.effective_message.reply_text,
+            explicit_create=explicit_create,initial_instructions=initial)
         if studio.job.data["status"] in ("rejected","unsupported"):
             await update.effective_message.reply_text(studio.job.data["error"])
+        elif studio.job.data["status"] in ("completed","partial"):
+            await deliver(context.bot,update.effective_chat.id,studio.job)
     context.application.create_task(operation(update,context,work),update=update)
 
 
 async def create_game(update,context):
-    await handle_request(update,context," ".join(context.args))
+    await handle_request(update,context," ".join(context.args),explicit_create=True)
 
 
 async def text_message(update,context):
@@ -168,16 +193,31 @@ async def on_error(update,context):
 
 
 async def on_startup(application):
-    application.bot_data["supervisor"]=Supervisor()
+    studio=Supervisor()
+    application.bot_data["supervisor"]=studio
     try:
-        descriptions={"start":"Studio introduction","create":"Propose a game","status":"Current progress",
-            "plan":"View game plan","approve":"Approve and build","cancel":"Cancel active job",
+        descriptions={"start":"Studio introduction","create":"Plan a Unity game","status":"Current progress",
+            "plan":"View game plan","approve":"Approve plan and build","cancel":"Cancel active job",
             "budget":"Inspect spending","result":"Get verified artifacts"}
         await application.bot.set_my_commands([BotCommand(k,v) for k,v in descriptions.items()],
             scope=BotCommandScopeChat(chat_id=int(os.environ["TELEGRAM_ALLOWED_USER_ID"])))
     except Exception as error:
         logger.error("Could not update command menu (%s)",type(error).__name__)
     logger.info("Telegram bot @%s is online",application.bot.username)
+    if studio.job and studio.job.data.get("status")=="interrupted":
+        application.bot_data["operation"]=True
+        async def resume():
+            job=studio.job
+            chat_id=job.data.get("chat_id")
+            async def notify(text):
+                if chat_id is not None: await application.bot.send_message(chat_id,text[:3900])
+            try:
+                artifacts=await studio.approve(notify=notify)
+                if artifacts and chat_id is not None and job.data.get("status") in ("completed","partial"):
+                    await deliver(application.bot,chat_id,job)
+            finally:
+                application.bot_data.pop("operation",None)
+        application.create_task(resume())
 
 
 def build_application():

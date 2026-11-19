@@ -3,7 +3,8 @@ import json
 import os
 
 from studio.schemas import AssetSpec, CodeBundle, GameSpec, LevelSpec, UIPlan
-from studio.flexible import GameSpecV2, Implementation, PlanReview, validate_prompt_trace, validate_implementation
+from studio.flexible import (GameSpecV2, Implementation, PlanReview,
+                             normalize_implementation_response, validate_prompt_trace, validate_implementation)
 
 
 # Model configuration keys describe tasks, not additional agent identities.
@@ -54,7 +55,8 @@ class GameDesigner:
             "Keep every explicit instruction; each requirement quotes an EXACT substring of the request. "
             "Split compound instructions into separate R IDs, including visual style, controls and target. "
             "Plan dependent T tasks for all R IDs using only designer/developer/art/qa. "
-            "Record defaults for unspecified details in assumptions. Fundamental ambiguity goes in clarification_questions. "
+            "Record sensible defaults for unspecified details in assumptions. Never ask the user questions; "
+            "leave clarification_questions empty and resolve ambiguity with the smallest reasonable assumption. "
             "Do not scope away requested systems: describe development stages and limitations within the actual job cap. "
             "Runtime requirements need behavioral probes; visuals need human review. Actual artwork uses images or "
             "licensed local asset_library files. Images cannot generate 3D models. Without an available model/audio "
@@ -71,19 +73,25 @@ class GameDesigner:
 
     async def plan_ui(self, service, spec):
         """Plan UI as a Game Designer task using the existing UI model profile."""
+        runtime = ("Describe only UI requested by this game's specification. UI must be implemented by the developer; "
+                   "no menu, HUD or touch controls are supplied automatically."
+                   if getattr(spec, "version", 1) == 2 else
+                   "The runtime implements responsive menu, HUD, pause, results and touch controls.")
         return UIPlan.model_validate(await service.json("ui",
             "You are the Game Designer planning UI/UX for the requested target and controls. Read GameSpec and return a UIPlan. "
             "Use concise English labels, strong contrast, large touch targets and the shared palette. "
-            "Return exactly the schema fields. The runtime implements responsive menu, HUD, pause, results and touch controls.",
+            "Return exactly the schema fields. " + runtime,
             {"game_spec": spec.model_dump(), "schema": UIPlan.model_json_schema()}, 1200))
 
 
 class UnityDeveloper:
     async def implement(self, service, spec, ui, art):
+        ui_data = ui.model_dump() if hasattr(ui, "model_dump") else ui
         result = await service.json("developer", FLEXIBLE_DEVELOPER_PROMPT,
-            {"original_request": service.job.data["request"], "game_spec": spec.model_dump(),
-             "ui_plan": ui.model_dump(), "assets": art, "schema": Implementation.model_json_schema()}, 16000)
-        return validate_implementation(spec, Implementation.model_validate(result))
+            {"original_request": service.job.data.get("effective_request", service.job.data["request"]), "game_spec": spec.model_dump(),
+             "ui_plan": ui_data, "assets": art, "schema": Implementation.model_json_schema()}, 16000)
+        normalized = normalize_implementation_response(result, spec)
+        return validate_implementation(spec, Implementation.model_validate(normalized))
 
     async def generate(self, service, spec, runtime_contract):
         result = await service.json("developer",
@@ -124,8 +132,9 @@ class QADebugger:
             "You are QA & Debugger. Compare the ORIGINAL user request, every GameSpec requirement, implementation "
             "and behavioral probes. Report omitted prompt instructions, missing R IDs and concrete concerns. "
             "Check genre, dimension, camera, controls, progression, assets and UI. Compilation is not gameplay evidence. "
-            "This is a design review, not proof that any test passed. Return only the schema fields.",
-            {"original_request": service.job.data["request"], "game_spec": spec.model_dump(),
+            "This is a design review, not proof that any test passed. Do not ask the user for details; resolve optional gaps "
+            "using the recorded assumptions. Return only the schema fields.",
+            {"original_request": service.job.data.get("effective_request", service.job.data["request"]), "game_spec": spec.model_dump(),
              "implementation": plan.model_dump(), "schema": PlanReview.model_json_schema()}, 3000))
 
     async def repair_implementation(self, service, spec, plan, diagnostics):
@@ -144,7 +153,8 @@ class QADebugger:
             {"original_request": service.job.data["request"], "game_spec": spec.model_dump(),
              "implementation": plan.model_dump(), "diagnostics": diagnostics,
              "schema": Implementation.model_json_schema()}, 16000)
-        repaired = validate_implementation(spec, Implementation.model_validate(result))
+        normalized = normalize_implementation_response(result, spec)
+        repaired = validate_implementation(spec, Implementation.model_validate(normalized))
         if [p.model_dump() for p in repaired.probes] != [p.model_dump() for p in plan.probes]:
             raise ValueError("QA repairs must preserve behavioral probes; review a changed test plan separately")
         return repaired
@@ -178,7 +188,7 @@ def available_library():
 
 
 FLEXIBLE_DEVELOPER_PROMPT = """You are the Unity Developer implementing the original prompt in Unity 6.
-Return an Implementation with scripts:{scripts:[{filename,content}]}, scenes and behavioral probes.
+Return an Implementation with scripts:{scripts:[{filename,content}]}, scenes:{version:2,title,dimension,orientation,scenes:[...],materials:[...]}, and behavioral probes.
 Do not replace requested mechanics, genre, dimension, camera, controls or art. List unfinished R IDs in limitations.
 Generate standalone public MonoBehaviour classes with file names matching class names, no namespaces.
 Use UnityEngine and UnityEngine.InputSystem (Keyboard.current/Mouse.current), not the legacy Input API.

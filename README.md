@@ -1,6 +1,6 @@
 # Telegram Unity Studio
 
-A persistent, budgeted supervisor turns an approved prompt into an isolated Unity prototype. New requests use a versioned specification for any Unity game genre, 2D/3D/mixed scenes, explicitly requested components, multiple scripts and runtime probes. Version 1 saved platformer plans remain readable and keep their original build path. The original Unity project in `generated_game` supplies settings and packages for new projects; keep it alongside the application.
+A persistent, budgeted supervisor turns an approved `/create <description>` plan into an isolated Unity prototype. Planning uses a versioned specification for any Unity game genre, 2D/3D/mixed scenes, explicitly requested components, multiple scripts and runtime probes. Missing optional details use sensible defaults; they do not block planning. Version 1 saved platformer plans remain readable and keep their original build path. The original Unity project in `generated_game` supplies settings and packages for new projects; keep it alongside the application.
 
 ## Launch
 
@@ -24,26 +24,23 @@ Credentials, Telegram/job records, cost ledgers, model caches, Unity caches, ZIP
 
 ## Telegram workflow
 
-1. `/create A woodland platformer with jumping, coins and patrolling enemies`
-2. `/plan` to inspect the game plan and `/budget` to inspect charges and reservations.
-3. `/approve` to generate and verify the project.
-4. `/status` during the build; `/cancel` to request cancellation.
-5. `/result` to retrieve the source archive, validation report, instructions, captured preview and NUnit results. Verified artifacts are also sent automatically after a successful build. An APK is included only after a successful Android build and archive integrity check.
+1. `/create A woodland platformer with jumping, coins and patrolling enemies` creates a game plan without asking follow-up questions.
+2. `/plan` inspects the plan; `/budget` inspects charges and reservations. Send `/approve` to start Unity generation, or `/cancel` to discard the plan.
+3. `/status` follows the build. Additional instructions during planning are added to the prompt while preserving the original. Instructions sent while a plan waits for `/approve` are included when approved. Instructions received after the build starts are saved and reported as queued, not applied to that build.
+4. `/result` retrieves the source archive, validation report, instructions, captured preview and NUnit results. Verified artifacts are also sent automatically after a successful build. An APK is included only after a successful Android build and archive integrity check.
 
-`/start` introduces the bot; `/myid` reports the sender's own Telegram ID. Every command that reads or changes jobs checks the configured authorized user ID. Plain game requests use the same workflow. `tt` is rejected without an API call. Unrelated requests are rejected, and vague requests ask for details that would change the game. The plan lists prompt requirements, assumptions, tasks and known limitations before approval.
+`/start` introduces the bot; `/myid` reports the sender's own Telegram ID. Every command that reads or changes jobs checks the configured authorized user ID. Plain game requests use the same workflow. `tt` is rejected without an API call. Unrelated ordinary messages are rejected; `/create` treats its description as the authoritative game request. The plan records prompt requirements, assumptions, tasks and known limitations before `/approve`.
 
 ## CLI
 
 ```powershell
 # Same supervisor, including real planning, under the default $2 cap
-.\.venv\Scripts\python.exe main.py create "Create a woodland platformer with coins"
+.\.venv\Scripts\python.exe main.py create "Create a woodland platformer with coins" --approve
 .\.venv\Scripts\python.exe main.py plan
+# Optional manual retry for an older saved job
 .\.venv\Scripts\python.exe main.py approve
 
-# Fully authorized unattended demonstration
-.\.venv\Scripts\python.exe main.py create "Create a woodland platformer with coins" --approve
-
-# Deterministic example plan, with live coding/UI/art stages after approval
+# Deterministic example, planned and built
 .\.venv\Scripts\python.exe main.py demo --approve
 
 # Reverify saved artifacts without repeating paid agents; optionally build Android
@@ -66,10 +63,12 @@ The existing Unity CLI remains the normal compile, scene-build, test and APK pat
 The connector starts the matching Python server over stdio with this command (it is launched automatically by the app; do not start a second copy):
 
 ```powershell
-uvx --from mcpforunityserver==10.3.0 mcp-for-unity
+uvx --python .\.venv\Scripts\python.exe --from mcpforunityserver==10.3.0 mcp-for-unity
 ```
 
 `uv`/`uvx` and Python 3.10+ must be installed. Set these optional values in `.env`:
+
+The app automatically supplies its own Python interpreter to `uvx` unless `--python` is explicitly configured. This avoids selecting an incompatible system Python (Python 3.15 caused a dependency build failure during the delivery audit).
 
 ```dotenv
 STUDIO_UNITY_MCP_ENABLED=1
@@ -92,6 +91,8 @@ Then start the Telegram application normally:
 ```
 
 The app discovers the server's live tool list and exposes role-limited Python tool facades to the five existing roles. Supervisor and Game Designer can inspect; Unity Developer can create scenes/GameObjects/components and search/create/import project assets; Art Designer can search/create/import assets; QA can inspect scenes, read the console, validate scripts and request tests. The wrapper excludes arbitrary code/menu execution and confines asset paths to the target project's `Assets` folder. Tool calls are made by trusted orchestration, so game-prompt text is not a command or raw tool argument. The current CrewAI and AutoGen model adapters remain on their existing metered JSON path; they do not advertise model-selected function calling.
+
+When enabled and a matching Editor is available, the existing agents now request role-specific observations through `ModelService`: scene hierarchy for Supervisor/Designer/Developer, asset search for Art Designer, and console errors for QA. Designer/Developer/QA observations are included as data in their metered model requests, including CrewAI and AutoGen calls. Successful use records `mcp_tool_used`; failures record `mcp_fallback` and retain the existing workflow. This does not start an Editor automatically; the batch Unity builder requires that project to be closed in interactive Unity.
 
 `mcp-smoke` creates a disposable scene and cube, adds a Rigidbody, creates a temporary material, checks the scene hierarchy/GameObject and reads console errors, then restores the original scene and removes its temporary assets. It refuses to run if the original scene is dirty, multiple scenes are loaded, or the probe paths/names already exist.
 
@@ -134,7 +135,7 @@ Default planning uses CrewAI with a custom metered LLM. Default QA repair uses A
 
 New version 2 jobs generate multiple named C# components and explicit scene descriptions. The builder does not inject a player, camera, floor, coins, menu or particular physics system. A scene must specify its camera, lighting for 3D, gameplay objects, components and references. Tests load each named scene, execute key/invoke/click steps, check runtime state and save machine-readable evidence linked to requirement IDs. Existing version 1 platformer jobs continue using their maintained runtime and deterministic scene builder. Generated C# is scope-checked and still must compile and pass Unity tests; this is not a security sandbox for malicious code.
 
-Each job lives in `jobs/<id>/`, including a self-contained `UnityProject`, specifications, append-only event log, cost ledger, generated files, Unity logs and validation evidence. `jobs/current.txt` records the current job. After an interrupted process, an existing plan can be retried with `/approve`; its ledger remains charged and generated images can reuse cache. In-flight calls with unknown billing retain their reservations. A global Unity-job lock prevents overlapping builds, in addition to isolated projects.
+Each job lives in `jobs/<id>/`, including a self-contained `UnityProject`, specifications, append-only event log, cost ledger, generated files, Unity logs and validation evidence. `jobs/current.txt` records the current job. Plans wait for `/approve`; a job interrupted after approval resumes on bot startup. Its ledger remains charged and generated images can reuse cache. In-flight calls with unknown billing retain their reservations. A global Unity-job lock prevents overlapping builds, in addition to isolated projects.
 
 ## Budget and model policy
 

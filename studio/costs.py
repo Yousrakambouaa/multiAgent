@@ -50,6 +50,6 @@ class Ledger:
 
     def summary(self):
         entries = self.job.data["costs"]
-        actual = sum(e["charged_usd"] for e in entries if e["basis"] == "reported API cost")
-        estimates = float(self.committed) - actual
+        actual = sum((Decimal(str(e["charged_usd"])) for e in entries if e["basis"] == "reported API cost"), Decimal(0))
+        estimates = self.committed - actual
         return f"API-reported: ${actual:.6f}; estimates/reservations: ${estimates:.6f}; cap: ${self.job.data['cap_usd']:.2f}"

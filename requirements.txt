@@ -6,3 +6,6 @@ Pillow==13.0.0
 crewai==1.15.41
 autogen-agentchat==0.7.5
 autogen-ext[openai]==0.7.5
+# AutoGen 0.7.5 requires protobuf 5; newer googleapis-common-protos requires 6.
+protobuf==5.29.6
+googleapis-common-protos==1.71.0

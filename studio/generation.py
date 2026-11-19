@@ -74,9 +74,16 @@ async def build_flexible(supervisor, service, spec, project, notify, android):
         write_json(job.directory / "requirements.json", report["requirements"])
         write_json(job.directory / "validation_report.json", report)
     try:
-        await supervisor.notify(notify, "Designer: planning UI for the requested game and target.")
-        ui = await supervisor.agents["designer"].plan_ui(service, spec)
-        write_json(job.directory / "ui_plan.json", ui.model_dump())
+        # GameSpec v2 already contains genre-specific UI and control requirements.
+        # Keep the legacy UIPlan model (with its menu/touch fields) on the v1 path only.
+        if getattr(spec, "version", 1) == 2:
+            ui = {"ui_requirements": spec.ui_requirements, "controls": spec.controls,
+                  "target_platform": spec.target_platform}
+        else:
+            await supervisor.notify(notify, "Designer: planning UI for the requested game and target.")
+            ui = await supervisor.agents["designer"].plan_ui(service, spec)
+            ui = ui.model_dump()
+        write_json(job.directory / "ui_plan.json", ui)
         job.data["tasks"][2]["status"] = "passed"
         await supervisor.notify(notify, "Art Designer: generating or importing requested assets; unavailable assets will be listed.")
         art = await supervisor.agents["art"].create(service, spec, project)
@@ -116,6 +123,10 @@ async def build_flexible(supervisor, service, spec, project, notify, android):
                 plan = await supervisor.agents["qa"].repair_implementation(service, spec, plan, str(error))
         report["limitations"].extend(plan.limitations)
         report["limitations"].extend(a.get("reason", "Unavailable asset: " + a["id"]) for a in manifest if a["status"] != "ready")
+        queued = [item["text"] for item in job.data.get("additional_instructions", []) if item.get("status") == "queued"]
+        if queued:
+            report["queued_instructions"] = queued
+            report["limitations"].append("These user instructions were saved but arrived after planning; they were not applied to this build: " + " | ".join(queued))
         report["android"] = {"status": "not_requested", "device_test": "unverified"}
         if android and spec.target_platform.casefold() == "android":
             try:
@@ -135,9 +146,11 @@ async def build_flexible(supervisor, service, spec, project, notify, android):
         job.data["status"] = report["completion_status"]
         job.data["tasks"][9]["status"] = "passed"
         job.event("supervisor", job.data["status"])
+        update_notice = ("\nQueued instruction(s) were saved but not applied to this build: " + " | ".join(queued)
+                         if queued else "")
         await supervisor.notify(notify, f"{job.data['status'].capitalize()} prototype: {project}\n"
             "Use /result for the project and requirement-by-requirement evidence. "
-            "Partial means some requested work or review remains unfinished.\n" + Ledger(job).summary())
+            "Partial means some requested work or review remains unfinished.\n" + Ledger(job).summary() + update_notice)
         return artifacts
     except Exception as error:
         report["verification_error"] = str(error)

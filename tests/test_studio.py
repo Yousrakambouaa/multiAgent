@@ -3,9 +3,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from contextlib import ExitStack
 from types import SimpleNamespace
+from game_examples import examples
 
 from pydantic import ValidationError
 
@@ -111,21 +112,51 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name); self.studio=Supervisor(self.root)
 
-    async def test_approval_required_before_unity_work(self):
+    async def test_create_saves_plan_and_waits_for_optional_user_approval(self):
         with patch.object(self.studio.registry,"refresh",AsyncMock()):
-            with patch("studio.supervisor.ModelService.json",AsyncMock(return_value={"decision":"create","supported":True})):
-                with patch("studio.supervisor.GameDesigner.plan",AsyncMock(return_value=demo_spec())):
+            with patch("studio.supervisor.GameDesigner.plan",AsyncMock(return_value=demo_spec())):
+                with patch.object(self.studio,"approve",AsyncMock()) as approve:
                     job=await self.studio.submit("Create a woodland platformer")
         self.assertEqual(job.data["status"],"awaiting_approval")
         self.assertFalse((job.directory/"UnityProject").exists())
-        with self.assertRaises(RuntimeError): await self.studio.submit("another")
+        approve.assert_not_awaited()
 
-    async def test_unrelated_or_ambiguous_request_never_creates_project(self):
-        for decision,status in [({"decision":"reject"},"rejected"),({"decision":"clarify","reason":"Which game?"},"rejected")]:
-            with patch.object(self.studio.registry,"refresh",AsyncMock()):
-                with patch("studio.supervisor.ModelService.json",AsyncMock(return_value=decision)):
-                    job=await self.studio.submit("please write a poem")
-            self.assertEqual(job.data["status"],status); self.assertFalse((job.directory/"UnityProject").exists())
+    async def test_ordinary_unrelated_message_is_rejected(self):
+        with patch.object(self.studio.registry,"refresh",AsyncMock()):
+            with patch("studio.supervisor.ModelService.json",AsyncMock(return_value={"decision":"reject"})):
+                job=await self.studio.submit("please write a poem",explicit_create=False)
+        self.assertEqual(job.data["status"],"rejected"); self.assertFalse((job.directory/"UnityProject").exists())
+
+    async def test_clarification_answer_during_planning_is_applied_without_restarting_original_prompt(self):
+        original="Create a minimalist 3D puzzle game for PC"
+        _,spec,_=examples("puzzle")
+        spec.clarification_questions=["What rules should the puzzle use?"]
+        prompts=[]
+        async def plan(service,prompt):
+            prompts.append(prompt)
+            if len(prompts)==1:
+                self.studio.add_instruction("Use a grid and rotate pieces with Q and E")
+            return spec
+        with patch.object(self.studio.registry,"refresh",AsyncMock()),patch("studio.supervisor.GameDesigner.plan",side_effect=plan),patch.object(self.studio,"approve",AsyncMock()) as approve:
+            job=await self.studio.submit(original)
+        self.assertEqual(len(prompts),2)
+        self.assertIn(original,prompts[1]); self.assertIn("rotate pieces with Q and E",prompts[1])
+        self.assertEqual(job.data["request"],original)
+        self.assertEqual(job.data["additional_instructions"][0]["status"],"applied")
+        saved=json.loads((job.directory/"game_spec.json").read_text())
+        self.assertEqual(saved["clarification_questions"],[])
+        self.assertEqual(job.data["status"],"awaiting_approval")
+        approve.assert_not_awaited()
+
+    async def test_late_instruction_is_persisted_and_does_not_replace_original(self):
+        original="Create a 3D racing game"
+        job=Job.create(original,2,root=self.root)
+        job.data["status"]="building";job.save();self.studio.job=job
+        response=self.studio.add_instruction("Make the track snowy")
+        saved=Job.load(job.directory/"job.json")
+        self.assertIn("queued",response)
+        self.assertEqual(saved.data["request"],original)
+        self.assertEqual(saved.data["additional_instructions"][0],{"text":"Make the track snowy","status":"queued"})
 
     async def test_persistent_interruption_and_cancellation(self):
         job=Job.create("test",2,root=self.root); job.data["status"]="building"; job.save()
@@ -140,6 +171,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         with patch("studio.api.httpx.AsyncClient") as client:
             with self.assertRaises(BudgetExceeded): await service.post("images",{},"art","model",.01)
             client.assert_not_called()
+
 
     async def exercise_repair(self,failures,assembly_failures=None):
         job=Job.create("platformer",2,root=self.root)
@@ -210,6 +242,34 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         job=Job.create("test",2,root=self.root);job.data["cancel_requested"]=True
         self.studio.fail(job,RuntimeError("framework stopped"))
         self.assertEqual(job.data["status"],"cancelled")
+
+
+class FailedJobRetryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_approve_retries_failed_job_from_its_saved_spec(self):
+        _,spec,_=examples("racing")
+        job=SimpleNamespace(directory=Path("virtual-job"),data={"id":"retry-test","request":"Create a 3D racing game",
+            "status":"failed","error":"old shape error","effective_request":"Create a 3D racing game",
+            "additional_instructions":[],"instruction_revision":0,"costs":[],"cap_usd":2},
+            save=Mock(),event=Mock(),check_cancelled=Mock())
+        studio=Supervisor.__new__(Supervisor)
+        studio.root=Path("virtual-root")
+        studio.job=job
+        studio.lock=asyncio.Lock()
+        studio.registry=SimpleNamespace(refresh=AsyncMock())
+        service=SimpleNamespace(unity_context=AsyncMock())
+        class NoopLock:
+            def __init__(self,*args):pass
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+        real_is_file=Path.is_file
+        def has_saved_spec(path):
+            if path==job.directory/"game_spec.json":return True
+            return real_is_file(path)
+        with patch("studio.supervisor.ProcessLock",NoopLock),patch("studio.supervisor.ModelService",return_value=service),patch("studio.supervisor.load_game_spec",return_value=spec),patch("studio.supervisor.write_json"),patch("studio.supervisor.asyncio.to_thread",new=AsyncMock(return_value=job.directory/"UnityProject")),patch("studio.generation.build_flexible",AsyncMock(return_value=["artifact"])) as build,patch.object(Path,"is_file",has_saved_spec),patch.object(Path,"read_text",return_value="{}"):
+            await studio.approve()
+        self.assertEqual(job.data["status"],"building")
+        self.assertEqual(job.data["error"],"")
+        build.assert_awaited_once()
 
 
 if __name__=="__main__": unittest.main()

@@ -15,6 +15,8 @@ from studio.state import JobCancelled, write_json
 
 class ArtDesigner:
     async def create(self, service, spec, project, strict=False):
+        if hasattr(service, "unity_context"):
+            await service.unity_context("art")
         if getattr(spec, "version", 1) == 2:
             return await create_flexible_art(self, service, spec, project)
         folder = project / "Assets" / "Studio" / "Art"

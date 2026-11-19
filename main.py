@@ -87,7 +87,7 @@ async def run(args):
     if supervisor.job:
         print("Status:",supervisor.job.data["status"])
         print(Ledger(supervisor.job).summary())
-        return 0 if supervisor.job.data["status"] in ("completed","awaiting_approval","cancelled") else 1
+        return 0 if supervisor.job.data["status"] in ("completed","partial","awaiting_approval","cancelled") else 1
     return 0
 
 

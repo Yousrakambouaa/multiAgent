@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 
 from studio.config import JOBS, ROOT
@@ -38,7 +39,7 @@ AGENT_ACTIONS = {
     },
     "developer": {
         "manage_scene": {"get_active", "get_hierarchy", "get_build_settings", "get_loaded_scenes", "create", "save", "load"},
-        "manage_gameobject": {"find", "create", "modify", "delete"},
+        "manage_gameobject": {"create", "modify", "delete"},
         "manage_components": {"add", "set_property"},
         "manage_asset": {"search", "create", "import", "delete"},
         "find_gameobjects": {None},
@@ -136,6 +137,8 @@ class UnityMCPClient:
             raise MCPError("Invalid Unity MCP arguments or timeout configuration") from error
         if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
             raise MCPError("STUDIO_UNITY_MCP_ARGS_JSON must be a JSON string array")
+        if Path(command).stem.lower() == "uvx" and "--python" not in args:
+            args = ["--python", sys.executable, *args]
         try:
             return cls(command, args, timeout)
         except ValueError as error:
@@ -149,7 +152,9 @@ class UnityMCPClient:
             self.process = await asyncio.create_subprocess_exec(
                 self.command, *self.args, stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                cwd=ROOT, limit=2**20)
+                cwd=ROOT, limit=2**20,
+                env={k: v for k, v in os.environ.items() if k not in
+                     ("OPENROUTER_API_KEY", "TELEGRAM_BOT_TOKEN")})
             self._stderr_task = asyncio.create_task(self._drain_stderr())
             init = await self._request("initialize", {
                 "protocolVersion": PROTOCOL_VERSION,
@@ -263,7 +268,7 @@ class UnityMCPClient:
                 data = value.get("data", value)
                 if isinstance(data, dict):
                     return data
-        raise MCPError("Unity MCP project-info resource did not return JSON project details")
+        raise MCPError("Unity MCP has no connected project details; open the matching Unity Editor and start its MCP bridge")
 
     async def verify_project(self, expected_root):
         expected = _authorized_project_root(expected_root)
@@ -282,8 +287,11 @@ class UnityMCPClient:
 
     @staticmethod
     def _validate_asset_paths(value, project_root):
+        assets_root = (project_root / "Assets").resolve()
+        if not assets_root.is_relative_to(project_root.resolve()):
+            raise MCPError("Unity Assets directory escapes the authorized project")
         path_keys = {"path", "prefabpath", "materialpath", "scriptpath", "filepath",
-                     "destination", "destinationpath", "sourcepath", "uri"}
+                     "destination", "destinationpath", "sourcepath", "scenepath", "uri"}
         if isinstance(value, dict):
             for key, item in value.items():
                 normalized_key = key.casefold().replace("_", "") if isinstance(key, str) else ""
@@ -302,8 +310,8 @@ class UnityMCPClient:
                     if not candidate.startswith("Assets/") or Path(candidate).is_absolute():
                         raise MCPError("MCP asset paths must be relative to this Unity project's Assets folder")
                     resolved = (project_root / candidate).resolve()
-                    if not resolved.is_relative_to(project_root.resolve()):
-                        raise MCPError("MCP asset path escapes the authorized Unity project")
+                    if not resolved.is_relative_to(assets_root):
+                        raise MCPError("MCP asset path escapes the authorized Unity Assets folder")
                 UnityMCPClient._validate_asset_paths(item, project_root)
         elif isinstance(value, list):
             for item in value:
@@ -332,11 +340,17 @@ class UnityMCPClient:
                 raise MCPError("Unity Developer cleanup is reserved for its exact MCP probe scene")
         if name not in self.tools:
             raise MCPError("Unity MCP server does not expose the requested tool")
+        # Recheck on every call: the user may switch the active Editor instance.
+        await self.verify_project(root)
         schema = self.tools[name].get("inputSchema")
         if isinstance(schema, dict):
             missing = [field for field in schema.get("required", []) if field not in arguments]
             if missing:
                 raise MCPError(f"Missing required parameters for {name}: {', '.join(missing)}")
+            if schema.get("additionalProperties") is False:
+                unknown = set(arguments) - set(schema.get("properties", {}))
+                if unknown:
+                    raise MCPError(f"Unsupported parameters for {name}: {', '.join(sorted(unknown))}")
         result = await self._request("tools/call", {"name": name, "arguments": arguments})
         _check_tool_error(result, name)
         log.info("Unity MCP tool call agent=%s tool=%s action=%s", agent, name, action or "read")
@@ -393,7 +407,7 @@ class UnityMCPClient:
         failures = []
         try:
             await developer.call("manage_scene", {
-                "action": "create", "name": PROBE_SCENE_NAME, "path": "Assets/Studio/Generated"
+                "action": "create", "name": PROBE_SCENE_NAME, "path": "Assets/Studio/Generated/"
             })
             scene_created = True
             await developer.call("manage_gameobject", {
@@ -462,7 +476,22 @@ class UnityMCPClient:
             except asyncio.CancelledError:
                 pass
         if process and process.returncode is None:
-            process.terminate()
+            # EOF lets uvx and its server child exit together and drains Windows pipes.
+            if hasattr(process, "communicate"):
+                process.stdin.close()
+                try:
+                    await asyncio.wait_for(process.communicate(), 3)
+                    return
+                except asyncio.TimeoutError:
+                    if os.name == "nt":
+                        killer = await asyncio.create_subprocess_exec(
+                            "taskkill.exe", "/PID", str(process.pid), "/T", "/F",
+                            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                        await killer.wait()
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                return
             try:
                 await asyncio.wait_for(process.wait(), 3)
             except asyncio.TimeoutError:

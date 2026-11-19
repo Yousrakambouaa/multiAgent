@@ -1,3 +1,4 @@
+import asyncio
 import json
 import tempfile
 import unittest
@@ -9,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 from pydantic import ValidationError
 
 from game_examples import REQUESTS, examples
-from studio.agents import GameDesigner, demo_spec
+from studio.agents import GameDesigner, UnityDeveloper, demo_spec
 from studio.assets import ArtDesigner
 from studio.flexible import (GameSpecV2, Implementation, load_game_spec,
                             requirement_report, validate_implementation, validate_prompt_trace)
@@ -58,6 +59,36 @@ class FlexibleContractTests(unittest.TestCase):
             value=spec.model_dump();value["tasks"][0][field]=["T1"] if field=="dependencies" else ["R99"]
             with self.subTest(field=field),self.assertRaises(ValidationError):GameSpecV2.model_validate(value)
 
+    def test_missing_task_links_are_filled_without_dropping_requirements(self):
+        _,spec,_=examples("puzzle")
+        value=spec.model_dump()
+        value["tasks"]=[dict(id="T1",description="Implement puzzle",owner="developer",dependencies=[],requirement_ids=["R1"])]
+        result=GameSpecV2.model_validate(value)
+        covered={rid for task in result.tasks for rid in task.requirement_ids}
+        self.assertEqual(covered,{requirement.id for requirement in spec.requirements})
+        self.assertEqual(value["tasks"][0]["requirement_ids"],["R1"])
+
+    def test_developer_accepts_flattened_script_list(self):
+        request,spec,plan=examples("racing")
+        response=plan.model_dump()
+        response["scripts"]=response["scripts"]["scripts"]
+        service=SimpleNamespace(job=SimpleNamespace(data={"request":request}),json=AsyncMock(return_value=response))
+        result=asyncio.run(UnityDeveloper().implement(service,spec,{"controls":spec.controls}, {}))
+        self.assertEqual(result,plan)
+
+    def test_developer_accepts_flattened_scene_list_and_keeps_scene_requirement_links(self):
+        request,spec,plan=examples("racing")
+        response=plan.model_dump()
+        scene_bundle=response.pop("scenes")
+        response.update(title=scene_bundle["title"],dimension=scene_bundle["dimension"],
+                        orientation=scene_bundle["orientation"],materials=scene_bundle["materials"])
+        response["scenes"]=scene_bundle["scenes"]
+        response["scenes"][0]["requirement_ids"]=["R1","R2"]
+        service=SimpleNamespace(job=SimpleNamespace(data={"request":request}),json=AsyncMock(return_value=response))
+        result=asyncio.run(UnityDeveloper().implement(service,spec,{"controls":spec.controls}, {}))
+        self.assertEqual(result.scenes.dimension,spec.dimension)
+        self.assertEqual(result.scenes.scenes[0].requirement_ids,["R1","R2"])
+
     def test_3d_models_cannot_use_image_workflow(self):
         _,spec,_=examples("racing")
         value=spec.model_dump()
@@ -66,11 +97,12 @@ class FlexibleContractTests(unittest.TestCase):
 
     def test_dimension_scene_orientation_and_probe_reference_changes_are_rejected(self):
         _,spec,plan=examples("racing")
-        for change in ("dimension","scene","orientation","probe"):
+        for change in ("dimension","scene","orientation","probe","scene_requirement"):
             candidate=deepcopy(plan)
             if change=="dimension":candidate.scenes.dimension="2D"
             elif change=="scene":candidate.scenes.scenes[0].name="Substitute"
             elif change=="orientation":candidate.scenes.orientation="portrait"
+            elif change=="scene_requirement":candidate.scenes.scenes[0].requirement_ids=["R99"]
             else:candidate.probes[0].steps[0].object_id="missing"
             with self.subTest(change=change),self.assertRaises(ValueError):validate_implementation(spec,candidate)
 
@@ -112,22 +144,33 @@ class FlexibleWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.root=Path(self.temp.name)
         self.studio=Supervisor(self.root)
 
-    async def test_three_specific_genres_reach_approval_without_creating_projects(self):
+    async def test_create_plans_all_genres_and_preserves_distinct_game_specs(self):
+        specs=[]
         for genre in REQUESTS:
             request,spec,_=examples(genre)
-            with patch.object(self.studio.registry,"refresh",AsyncMock()),patch("studio.supervisor.ModelService.json",AsyncMock(return_value={"decision":"create"})),patch.object(self.studio.agents["designer"],"plan",AsyncMock(return_value=spec)):
+            with patch.object(self.studio.registry,"refresh",AsyncMock()),patch.object(self.studio.agents["designer"],"plan",AsyncMock(return_value=spec)),patch.object(self.studio,"approve",AsyncMock()) as approve:
                 job=await self.studio.submit(request)
             self.assertEqual(job.data["status"],"awaiting_approval")
             self.assertFalse((job.directory/"UnityProject").exists())
             self.assertIn(spec.genre,self.studio.plan_text())
+            approve.assert_not_awaited()
+            specs.append(spec)
             self.studio.cancel()
+        self.assertEqual(len({spec.genre for spec in specs}),3)
+        self.assertEqual(len({tuple(spec.mechanics) for spec in specs}),3)
 
-    async def test_major_ambiguity_needs_clarification_before_approval(self):
+    async def test_planner_questions_are_never_returned_as_user_clarification(self):
         request,spec,_=examples("puzzle");spec.clarification_questions=["Which puzzle rules?"]
-        with patch.object(self.studio.registry,"refresh",AsyncMock()),patch("studio.supervisor.ModelService.json",AsyncMock(return_value={"decision":"create"})),patch.object(self.studio.agents["designer"],"plan",AsyncMock(return_value=spec)):
-            job=await self.studio.submit(request)
-        self.assertEqual(job.data["status"],"rejected")
-        with self.assertRaises(RuntimeError):await self.studio.approve()
+        notifications=[]
+        async def notify(text):notifications.append(text)
+        with patch.object(self.studio.registry,"refresh",AsyncMock()),patch.object(self.studio.agents["designer"],"plan",AsyncMock(return_value=spec)),patch.object(self.studio,"approve",AsyncMock()) as approve:
+            job=await self.studio.submit(request,notify=notify)
+        self.assertEqual(job.data["status"],"awaiting_approval")
+        self.assertNotIn("Please clarify", "\n".join(notifications))
+        saved=json.loads((job.directory/"game_spec.json").read_text())
+        self.assertEqual(saved["clarification_questions"],[])
+        self.assertIn("/approve", "\n".join(notifications))
+        approve.assert_not_awaited()
 
     async def test_unavailable_3d_asset_does_not_call_image_generation_or_create_placeholder(self):
         _,spec,_=examples("racing")
@@ -164,8 +207,12 @@ class FlexibleWorkflowTests(unittest.IsolatedAsyncioTestCase):
             return {"status":"passed"}
         runner=SimpleNamespace(compile=AsyncMock(return_value={"status":"passed"}),assemble=AsyncMock(return_value={"success":True}),tests=runtime)
         from studio.flexible import PlanReview
-        with patch.object(self.studio.agents["designer"],"plan_ui",AsyncMock(return_value=ui)),patch.object(self.studio.agents["art"],"create",art),patch.object(self.studio.agents["developer"],"implement",AsyncMock(return_value=plan)),patch.object(self.studio.agents["qa"],"review_implementation",AsyncMock(return_value=PlanReview())),patch("studio.generation.UnityRunner",return_value=runner),patch("studio.generation.package",return_value=[Path("partial.zip")]):
+        with patch.object(self.studio.agents["designer"],"plan_ui",AsyncMock(return_value=ui)) as plan_ui,patch.object(self.studio.agents["art"],"create",art),patch.object(self.studio.agents["developer"],"implement",AsyncMock(return_value=plan)) as implement,patch.object(self.studio.agents["qa"],"review_implementation",AsyncMock(return_value=PlanReview())),patch("studio.generation.UnityRunner",return_value=runner),patch("studio.generation.package",return_value=[Path("partial.zip")]):
             await build_flexible(self.studio,service,spec,project,None,False)
+        plan_ui.assert_not_awaited()
+        expected_ui={"ui_requirements":spec.ui_requirements,"controls":spec.controls,"target_platform":spec.target_platform}
+        self.assertEqual(implement.await_args.args[2],expected_ui)
+        self.assertEqual(json.loads((job.directory/"ui_plan.json").read_text()),expected_ui)
         self.assertEqual(job.data["status"],"partial")
         report=json.loads((job.directory/"validation_report.json").read_text())
         self.assertEqual(report["requirements"][0]["verification_result"],"manual_review_required")

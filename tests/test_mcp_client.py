@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -137,6 +138,34 @@ class UnityMCPClientTests(unittest.IsolatedAsyncioTestCase):
             }, self.root)
         self.assertEqual(self.process.calls, [])
 
+    async def test_assets_cannot_escape_into_project_settings(self):
+        with self.assertRaises(mcp.MCPError):
+            await self.client.call_for_agent("developer", "manage_scene", {
+                "action": "load", "scene_path": "Assets/../ProjectSettings/unsafe.unity"
+            }, self.root)
+        self.assertFalse(self.process.calls)
+
+    async def test_editor_switch_is_rejected_before_any_tool_call(self):
+        self.process.root = str(self.temp / "another-project")
+        with self.assertRaisesRegex(mcp.MCPError, "does not match"):
+            await self.client.for_agent("developer", self.root).call("manage_scene", {"action": "create"})
+        self.assertFalse(self.process.calls)
+
+    async def test_existing_agent_service_uses_role_tools(self):
+        from studio.api import ModelService
+        from studio.state import Job
+        job = Job.create("test", .1, root=self.root.parents[1])
+        project = job.directory / "UnityProject"
+        project.mkdir()
+        self.process.root = str(project)
+        service = ModelService(None, job)
+        # A live client is injected only at the transport boundary.
+        with patch.object(mcp.UnityMCPClient, "from_environment", return_value=self.client), patch.object(self.client, "close", AsyncMock()):
+            for role in mcp.AGENT_TOOLS:
+                result = await service.unity_context(role)
+                self.assertIn(result["tool"], mcp.AGENT_TOOLS[role])
+        self.assertEqual(len(self.process.calls), 5)
+
     async def test_smoke_creates_inspects_restores_and_cleans_probe_scene(self):
         result = await self.client.smoke_test(self.root)
         self.assertEqual(result["scene_created"], mcp.PROBE_SCENE_PATH)
@@ -155,6 +184,11 @@ class UnityMCPClientTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MCPConfigurationTests(unittest.TestCase):
+    def test_uvx_uses_the_application_python(self):
+        with patch.dict(os.environ, {"STUDIO_UNITY_MCP_ENABLED": "1"}, clear=True):
+            client = mcp.UnityMCPClient.from_environment()
+            self.assertEqual(client.args[:2], ["--python", sys.executable])
+
     def test_disabled_by_default_and_timeout_is_bounded(self):
         with patch.dict(os.environ, {"STUDIO_UNITY_MCP_ENABLED": "0"}, clear=False):
             self.assertIsNone(mcp.UnityMCPClient.from_environment())

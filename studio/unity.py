@@ -27,6 +27,21 @@ class UnityFailure(RuntimeError):
         self.stage, self.owner = stage, owner
 
 
+def unity_failure_owner(stage, output):
+    owner = "scene" if stage == "assembly" else "qa" if stage in ("EditMode", "PlayMode") else "developer"
+    if re.search(r"Assets[\\/]+Studio[\\/]+(Runtime|Editor|Tests)[\\/].*error CS", output):
+        owner = "infrastructure"
+    if ("another Unity instance" in output or "already open" in output
+            or re.search(r"Licensing.*(?:failed|Error)|global mutex[^\n]*Unity[- ]LicenseClient|"
+                         r"(?:Unity[- ]license|license)[^\n]{0,100}(?:mutex|failed|unavailable)|"
+                         r"BIOS serial number|System\.Management\.ManagementException: Access denied|ObjectDisposedException", output, re.I)):
+        owner = "infrastructure"
+    if any(marker.casefold() in output.casefold() for marker in
+           ("not enough space", "Internal build system error", "The backend process appears", "No space left")):
+        owner = "infrastructure"
+    return owner
+
+
 def available_space(path):
     """Honor Windows user quotas, not just the volume's total free bytes."""
     if os.name=="nt":
@@ -140,10 +155,7 @@ class UnityRunner:
         output = log.read_text(encoding="utf-8", errors="replace") if log.exists() else "Unity did not write a log"
         if process.returncode != 0 or re.search(r"error CS\d+|Scripts have compiler errors|Aborting batchmode due to failure|Fatal Error", output):
             lines = [line for line in output.splitlines() if re.search(r"error CS|Exception|Error|error |Aborting|already open|Failed|failed|enough space|Internal build system|backend process", line)]
-            owner="scene" if stage=="assembly" else "qa" if stage in ("EditMode","PlayMode") else "developer"
-            if re.search(r"Assets[\\/]Studio[\\/](Runtime|Editor|Tests)[\\/].*error CS",output): owner="infrastructure"
-            if "another Unity instance" in output or "already open" in output: owner="infrastructure"
-            if any(marker in output for marker in ("not enough space", "Internal build system error", "The backend process appears", "No space left")): owner="infrastructure"
+            owner = unity_failure_owner(stage, output)
             raise UnityFailure(stage, "\n".join(lines)[-14000:] or output[-10000:], owner)
         return output
 
@@ -156,11 +168,8 @@ class UnityRunner:
     async def assemble(self):
         path = safe_path(self.project, "Artifacts/assembly.json")
         path.unlink(missing_ok=True)
-        try:
-            await self.run("assembly", ["-quit", "-executeMethod",
-                "UniversalSceneBuilder.Assemble" if self.flexible() else "StudioSceneBuilder.Assemble"])
-        except UnityFailure:
-            if not path.is_file(): raise
+        await self.run("assembly", ["-quit", "-executeMethod",
+            "UniversalSceneBuilder.Assemble" if self.flexible() else "StudioSceneBuilder.Assemble"])
         if not path.is_file():
             raise UnityFailure("assembly", "Unity exited without writing assembly evidence", "scene")
         report = json.loads(path.read_text(encoding="utf-8"))
@@ -168,15 +177,18 @@ class UnityRunner:
         count = report.get("scenes", 0)
         if not report.get("success") or (count != minimum if self.flexible() else count < minimum):
             raise UnityFailure("assembly", report.get("error", "Incomplete scene report"), "scene")
+        if len(report.get("scene_paths", [])) != count or len(set(report["scene_paths"])) != count:
+            raise UnityFailure("assembly", "Scene evidence has missing or duplicate paths", "scene")
         for scene in report["scene_paths"]:
             if not safe_path(self.project, scene).is_file():
                 raise UnityFailure("assembly", "Scene report references a missing file", "scene")
         # MCP inspection is an optional second view. The existing checked Unity
         # assembler remains authoritative when no matching live Editor is open.
         from studio.mcp_client import UnityMCPClient
-        client = UnityMCPClient.from_environment()
-        if client is not None:
-            try:
+        client = None
+        try:
+            client = UnityMCPClient.from_environment()
+            if client is not None:
                 await client.connect()
                 await client.verify_project(self.project)
                 # QA uses its read-only scene facade here; the existing CLI
@@ -187,11 +199,15 @@ class UnityRunner:
                 })
                 log.info("Unity MCP inspected assembled job %s via QA (%d tool results)",
                          self.job.data["id"], 1 if inspected else 0)
-            except Exception as error:
-                log.info("Unity MCP unavailable for job %s; existing Unity CLI path remains active (%s)",
-                         self.job.data["id"], type(error).__name__)
-            finally:
-                await client.close()
+        except Exception as error:
+            log.info("Unity MCP unavailable for job %s; existing Unity CLI path remains active (%s)",
+                     self.job.data["id"], type(error).__name__)
+        finally:
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception as error:
+                    log.warning("Unity MCP cleanup failed (%s)", type(error).__name__)
         return report
 
     async def tests(self, mode):
@@ -202,10 +218,9 @@ class UnityRunner:
         runtime = self.project / "Artifacts/runtime_checks.json"
         if flexible and mode == "PlayMode":
             runtime.unlink(missing_ok=True)
-        try:
-            await self.run(mode, ["-runTests", "-testPlatform", mode, "-testResults", str(path), "-testFilter", suite], graphics=mode == "PlayMode")
-        except UnityFailure:
-            if not path.is_file(): raise
+        if mode == "PlayMode":
+            (self.project / "Artifacts/preview.png").unlink(missing_ok=True)
+        await self.run(mode, ["-runTests", "-testPlatform", mode, "-testResults", str(path), "-testFilter", suite], graphics=mode == "PlayMode")
         if not path.is_file():
             raise UnityFailure(mode, "No NUnit test results produced", "infrastructure")
         result = parse_test_report(path, mode, expected=1 if flexible and mode == "PlayMode" else None,

@@ -1,0 +1,790 @@
+{
+  "version": 2,
+  "title": "Frog Grass Apple Collector",
+  "dimension": "3D",
+  "orientation": "landscape",
+  "scenes": [
+    {
+      "name": "MainGame",
+      "kind": "gameplay",
+      "background_color": "#18202A",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3"
+      ],
+      "objects": [
+        {
+          "id": "frog",
+          "name": "Frog Player",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Player",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Rigidbody",
+              "properties": [
+                {
+                  "name": "mass",
+                  "kind": "float",
+                  "value": "1"
+                },
+                {
+                  "name": "drag",
+                  "kind": "float",
+                  "value": "0"
+                },
+                {
+                  "name": "angularDrag",
+                  "kind": "float",
+                  "value": "0.05"
+                },
+                {
+                  "name": "useGravity",
+                  "kind": "bool",
+                  "value": "true"
+                },
+                {
+                  "name": "isKinematic",
+                  "kind": "bool",
+                  "value": "false"
+                }
+              ]
+            },
+            {
+              "type": "BoxCollider",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "false"
+                },
+                {
+                  "name": "center",
+                  "kind": "vector3",
+                  "value": "[0, 0.5, 0]"
+                },
+                {
+                  "name": "size",
+                  "kind": "vector3",
+                  "value": "[1, 1, 1]"
+                }
+              ]
+            },
+            {
+              "type": "FrogController",
+              "properties": []
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R1"
+          ]
+        },
+        {
+          "id": "ground",
+          "name": "Grass Ground",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            10.0,
+            1.0,
+            10.0
+          ],
+          "tag": "Ground",
+          "layer": 6,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "BoxCollider",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "false"
+                },
+                {
+                  "name": "center",
+                  "kind": "vector3",
+                  "value": "[0, 0, 0]"
+                },
+                {
+                  "name": "size",
+                  "kind": "vector3",
+                  "value": "[10, 1, 10]"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Plane",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R2"
+          ]
+        },
+        {
+          "id": "camera",
+          "name": "Main Camera",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            5.0,
+            -7.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "MainCamera",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Camera",
+              "properties": [
+                {
+                  "name": "fieldOfView",
+                  "kind": "float",
+                  "value": "60"
+                },
+                {
+                  "name": "clearFlags",
+                  "kind": "enum",
+                  "value": "Skybox"
+                }
+              ]
+            },
+            {
+              "type": "CameraFollow",
+              "properties": [
+                {
+                  "name": "target",
+                  "kind": "reference",
+                  "value": "frog"
+                },
+                {
+                  "name": "offset",
+                  "kind": "vector3",
+                  "value": "[0, 5, -7]"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            30.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R1"
+          ]
+        },
+        {
+          "id": "light",
+          "name": "Directional Light",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            10.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Light",
+              "properties": [
+                {
+                  "name": "type",
+                  "kind": "enum",
+                  "value": "Directional"
+                },
+                {
+                  "name": "intensity",
+                  "kind": "float",
+                  "value": "1"
+                },
+                {
+                  "name": "color",
+                  "kind": "color",
+                  "value": "#FFFFFF"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            50.0,
+            -30.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R1"
+          ]
+        },
+        {
+          "id": "apple1",
+          "name": "Apple 1",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            2.0,
+            1.0,
+            2.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Collectible",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "BoxCollider",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                },
+                {
+                  "name": "center",
+                  "kind": "vector3",
+                  "value": "[0, 0.5, 0]"
+                },
+                {
+                  "name": "size",
+                  "kind": "vector3",
+                  "value": "[1, 1, 1]"
+                }
+              ]
+            },
+            {
+              "type": "Apple",
+              "properties": [
+                {
+                  "name": "collector",
+                  "kind": "reference",
+                  "value": "appleCollector"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Sphere",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R3"
+          ]
+        },
+        {
+          "id": "apple2",
+          "name": "Apple 2",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            -2.0,
+            1.0,
+            2.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Collectible",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "BoxCollider",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                },
+                {
+                  "name": "center",
+                  "kind": "vector3",
+                  "value": "[0, 0.5, 0]"
+                },
+                {
+                  "name": "size",
+                  "kind": "vector3",
+                  "value": "[1, 1, 1]"
+                }
+              ]
+            },
+            {
+              "type": "Apple",
+              "properties": [
+                {
+                  "name": "collector",
+                  "kind": "reference",
+                  "value": "appleCollector"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Sphere",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R3"
+          ]
+        },
+        {
+          "id": "apple3",
+          "name": "Apple 3",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            2.0,
+            1.0,
+            -2.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Collectible",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "BoxCollider",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                },
+                {
+                  "name": "center",
+                  "kind": "vector3",
+                  "value": "[0, 0.5, 0]"
+                },
+                {
+                  "name": "size",
+                  "kind": "vector3",
+                  "value": "[1, 1, 1]"
+                }
+              ]
+            },
+            {
+              "type": "Apple",
+              "properties": [
+                {
+                  "name": "collector",
+                  "kind": "reference",
+                  "value": "appleCollector"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Sphere",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R3"
+          ]
+        },
+        {
+          "id": "apple4",
+          "name": "Apple 4",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            -2.0,
+            1.0,
+            -2.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Collectible",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "BoxCollider",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                },
+                {
+                  "name": "center",
+                  "kind": "vector3",
+                  "value": "[0, 0.5, 0]"
+                },
+                {
+                  "name": "size",
+                  "kind": "vector3",
+                  "value": "[1, 1, 1]"
+                }
+              ]
+            },
+            {
+              "type": "Apple",
+              "properties": [
+                {
+                  "name": "collector",
+                  "kind": "reference",
+                  "value": "appleCollector"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Sphere",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R3"
+          ]
+        },
+        {
+          "id": "appleCollector",
+          "name": "Apple Collector",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "AppleCollector",
+              "properties": []
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R3"
+          ]
+        },
+        {
+          "id": "uiCanvas",
+          "name": "UI Canvas",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Canvas",
+              "properties": [
+                {
+                  "name": "renderMode",
+                  "kind": "enum",
+                  "value": "ScreenSpaceOverlay"
+                }
+              ]
+            },
+            {
+              "type": "CanvasScaler",
+              "properties": [
+                {
+                  "name": "scaleFactor",
+                  "kind": "float",
+                  "value": "1"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R3"
+          ]
+        },
+        {
+          "id": "appleCounter",
+          "name": "Apple Counter Text",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Text",
+              "properties": [
+                {
+                  "name": "text",
+                  "kind": "string",
+                  "value": "Apples: 0/4"
+                },
+                {
+                  "name": "fontSize",
+                  "kind": "int",
+                  "value": "24"
+                },
+                {
+                  "name": "alignment",
+                  "kind": "enum",
+                  "value": "UpperLeft"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R3"
+          ]
+        },
+        {
+          "id": "winMessage",
+          "name": "Win Message Text",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Text",
+              "properties": [
+                {
+                  "name": "text",
+                  "kind": "string",
+                  "value": "You Win!"
+                },
+                {
+                  "name": "fontSize",
+                  "kind": "int",
+                  "value": "48"
+                },
+                {
+                  "name": "alignment",
+                  "kind": "enum",
+                  "value": "MiddleCenter"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R3"
+          ]
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "id": "grassMaterial",
+      "color": "#4CAF50",
+      "texture": "",
+      "metallic": 0.0,
+      "smoothness": 0.3,
+      "unlit": false
+    },
+    {
+      "id": "appleMaterial",
+      "color": "#F44336",
+      "texture": "",
+      "metallic": 0.0,
+      "smoothness": 0.3,
+      "unlit": false
+    }
+  ]
+}

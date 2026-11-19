@@ -1,6 +1,7 @@
 """Only explicitly configured, freshly priced models can receive paid work."""
 import json
 import os
+import math
 from datetime import datetime, timezone
 
 import httpx
@@ -28,14 +29,21 @@ class Registry:
         self.verified_at = None
 
     async def refresh(self):
+        self.models, self.images = {}, {}
         async with httpx.AsyncClient(timeout=40) as client:
             response = await client.get("https://openrouter.ai/api/v1/models")
             response.raise_for_status()
             self.models = {m["id"]: m for m in response.json()["data"]}
             for model_id in self.roles["art"]:
-                response = await client.get("https://openrouter.ai/api/v1/images/models/" + model_id + "/endpoints")
-                if response.is_success:
-                    self.images[model_id] = response.json()
+                try:
+                    response = await client.get("https://openrouter.ai/api/v1/images/models/" + model_id + "/endpoints")
+                    if response.is_success:
+                        data = response.json()
+                        if isinstance(data, dict) and isinstance(data.get("endpoints"), list):
+                            self.images[model_id] = data
+                except (httpx.HTTPError, ValueError):
+                    # Optional art discovery cannot prevent text-only planning.
+                    continue
         self.verified_at = datetime.now(timezone.utc).isoformat()
         write_json(CACHE / "models.json", dict(verified_at=self.verified_at, models=self.models, images=self.images))
 
@@ -55,7 +63,10 @@ class Registry:
     def rates(self, mid):
         pricing = self.models[mid]["pricing"]
         tiers = [pricing] + pricing.get("overrides", [])
-        return tuple(max(float(t.get(key, pricing[key])) for t in tiers) for key in ("prompt", "completion"))
+        rates = [tuple(float(t.get(key, pricing[key])) for t in tiers) for key in ("prompt", "completion")]
+        if any(not math.isfinite(rate) or rate < 0 for group in rates for rate in group):
+            raise ValueError("Invalid model pricing")
+        return tuple(max(group) for group in rates)
 
     def text_ceiling(self, mid, messages, max_tokens):
         # UTF-8 bytes safely overcount normal text tokens; reserve all output.

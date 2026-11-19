@@ -73,6 +73,50 @@ class GameSpecV2(Contract):
     clarification_questions: list[str] = Field(default_factory=list, max_length=10)
     limitations: list[str] = Field(default_factory=list, max_length=40)
 
+    @model_validator(mode="before")
+    @classmethod
+    def plan_every_requirement(cls, value):
+        """Fill omitted requirement-to-task links instead of rejecting a usable plan."""
+        if not isinstance(value, dict) or not isinstance(value.get("requirements"), list):
+            return value
+        requirements = value["requirements"]
+        tasks = value.get("tasks", [])
+        if not isinstance(tasks, list):
+            return value
+        covered = set()
+        for task in tasks:
+            if isinstance(task, dict) and isinstance(task.get("requirement_ids"), list):
+                covered.update(rid for rid in task["requirement_ids"] if isinstance(rid, str))
+        missing = [item for item in requirements if isinstance(item, dict)
+                   and isinstance(item.get("id"), str) and item["id"] not in covered]
+        if not missing:
+            return value
+
+        normalized = dict(value)
+        normalized_tasks = [dict(task) if isinstance(task, dict) else task for task in tasks]
+        used_ids = {task.get("id") for task in normalized_tasks if isinstance(task, dict)}
+        grouped = {}
+        for requirement in missing:
+            owner = requirement.get("owner", "developer")
+            if not isinstance(owner, str): owner = "developer"
+            owner = owner if owner in {"designer", "developer", "art", "qa"} else "developer"
+            grouped.setdefault(owner, []).append(requirement["id"])
+        next_id = 1
+        for owner, requirement_ids in grouped.items():
+            while f"T{next_id}" in used_ids:
+                next_id += 1
+            normalized_tasks.append({
+                "id": f"T{next_id}",
+                "description": "Complete the planned work for requirements: " + ", ".join(requirement_ids),
+                "owner": owner,
+                "dependencies": [],
+                "requirement_ids": requirement_ids,
+            })
+            used_ids.add(f"T{next_id}")
+            next_id += 1
+        normalized["tasks"] = normalized_tasks
+        return normalized
+
     @model_validator(mode="after")
     def validate_links(self):
         reqs = {r.id for r in self.requirements}
@@ -154,6 +198,7 @@ class FlexibleScene(Contract):
     name: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,40}$")
     kind: str = Field(default="gameplay", max_length=60)
     background_color: str = "#18202A"
+    requirement_ids: list[str] = Field(default_factory=list)
     objects: list[FlexibleObject] = Field(min_length=1, max_length=1000)
     @model_validator(mode="after")
     def links(self):
@@ -218,6 +263,46 @@ class Implementation(Contract):
     implemented_requirement_ids: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_script_bundle(cls, value):
+        """Accept the common flattened {scripts:[...]} response shape as well."""
+        if isinstance(value, dict) and isinstance(value.get("scripts"), list):
+            normalized = dict(value)
+            normalized["scripts"] = {"scripts": value["scripts"]}
+            return normalized
+        return value
+
+
+def normalize_implementation_response(value, spec):
+    """Adapt common flattened model output to the versioned implementation contract."""
+    if not isinstance(value, dict):
+        return value
+    normalized = dict(value)
+    if isinstance(normalized.get("scripts"), list):
+        normalized["scripts"] = {"scripts": normalized["scripts"]}
+
+    scenes = normalized.get("scenes")
+    if isinstance(scenes, list):
+        raw_bundle = {}
+        for key, fallback in (("title", spec.name), ("dimension", spec.dimension),
+                              ("orientation", spec.orientation)):
+            raw_bundle[key] = normalized.pop(key, fallback)
+        raw_bundle["version"] = 2
+        raw_bundle["scenes"] = scenes
+        raw_bundle["materials"] = normalized.pop("materials", [])
+        normalized["scenes"] = raw_bundle
+    elif isinstance(scenes, dict):
+        bundle = dict(scenes)
+        bundle.setdefault("version", 2)
+        bundle.setdefault("title", normalized.pop("title", spec.name))
+        bundle.setdefault("dimension", normalized.pop("dimension", spec.dimension))
+        bundle.setdefault("orientation", normalized.pop("orientation", spec.orientation))
+        outer_materials = normalized.pop("materials", [])
+        bundle.setdefault("materials", outer_materials)
+        normalized["scenes"] = bundle
+    return normalized
+
 
 class PlanReview(Contract):
     missing_requirement_ids: list[str] = Field(default_factory=list)
@@ -252,6 +337,8 @@ def validate_implementation(spec, plan):
     if len(materials) != len(plan.scenes.materials):
         raise ValueError("Duplicate material IDs")
     for scene in plan.scenes.scenes:
+        if not set(scene.requirement_ids) <= reqs:
+            raise ValueError("Unknown scene requirement")
         for obj in scene.objects:
             if not set(obj.requirement_ids) <= reqs or (obj.material and obj.material not in materials):
                 raise ValueError("Unknown object requirement or material")

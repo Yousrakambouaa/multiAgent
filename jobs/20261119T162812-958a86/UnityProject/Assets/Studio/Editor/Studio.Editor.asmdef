@@ -1,0 +1,1 @@
+{"name":"Studio.Editor","references":["Studio.Runtime"],"includePlatforms":["Editor"],"autoReferenced":true}
