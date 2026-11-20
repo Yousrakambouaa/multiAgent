@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import tempfile
 import unittest
 from copy import deepcopy
@@ -12,10 +13,10 @@ from pydantic import ValidationError
 from game_examples import REQUESTS, examples
 from studio.agents import GameDesigner, UnityDeveloper, demo_spec
 from studio.assets import ArtDesigner
-from studio.flexible import (GameSpecV2, Implementation, load_game_spec,
+from studio.flexible import (FlexibleComponent, FlexibleObject, GameSpecV2, Implementation, load_game_spec,
                             requirement_report, validate_implementation, validate_prompt_trace)
-from studio.generation import build_flexible, save_implementation
-from studio.schemas import UIPlan
+from studio.generation import autowire_named_component_references, build_flexible, save_implementation
+from studio.schemas import ScriptFile, UIPlan
 from studio.state import Job, write_json
 from studio.supervisor import Supervisor, TASKS
 from studio.unity import UnityFailure, UnityRunner
@@ -89,6 +90,64 @@ class FlexibleContractTests(unittest.TestCase):
         self.assertEqual(result.scenes.dimension,spec.dimension)
         self.assertEqual(result.scenes.scenes[0].requirement_ids,["R1","R2"])
 
+    def test_probe_display_name_resolves_to_scene_id(self):
+        _,spec,plan=examples("racing")
+        next(o for o in plan.scenes.scenes[0].objects if o.id=="car").name="Race Car"
+        plan.probes[0].assertions[0].object_id="Race Car"
+        validate_implementation(spec,plan)
+        self.assertEqual(plan.probes[0].assertions[0].object_id,"car")
+
+    def test_probe_error_identifies_missing_target_and_scene(self):
+        _,spec,plan=examples("racing")
+        plan.probes[0].assertions[0].object_id="missing_car"
+        with self.assertRaisesRegex(ValueError,"missing_car.*drive_to_finish.*Game.*assertions\\[0\\].*Available IDs:.*car"):
+            validate_implementation(spec,plan)
+
+    def test_probe_object_lookup_only_for_actions_that_use_it(self):
+        _,spec,plan=examples("racing")
+        plan.probes[0].steps[0].object_id="Keyboard"
+        validate_implementation(spec,plan)
+        plan.probes[0].assertions[0].object_id=""
+        with self.assertRaisesRegex(ValueError,"Unknown probe object"):
+            validate_implementation(spec,plan)
+
+    def test_probe_target_cannot_resolve_from_another_scene(self):
+        _,spec,plan=examples("racing")
+        other=deepcopy(plan.scenes.scenes[0]);other.name="Other"
+        other.objects[0].id="other_camera";other.objects[0].name="Other Camera"
+        spec.scenes.append("Other");plan.scenes.scenes.append(other)
+        plan.probes[0].assertions[0].object_id="other_camera"
+        with self.assertRaisesRegex(ValueError,"Unknown probe object"):
+            validate_implementation(spec,plan)
+
+    def test_developer_repairs_invalid_probe_before_unity_and_saves_diagnostics(self):
+        request,spec,plan=examples("racing")
+        bad=plan.model_dump();bad["probes"][0]["assertions"][0]["object_id"]="missing_car"
+        with tempfile.TemporaryDirectory() as temp:
+            job=Job.create(request,2,root=Path(temp))
+            service=SimpleNamespace(job=job,json=AsyncMock(side_effect=[bad,plan.model_dump()]))
+            result=asyncio.run(UnityDeveloper().implement(service,spec,{},{}))
+            self.assertEqual(result,plan)
+            self.assertEqual(service.json.await_count,2)
+            payload=service.json.await_args.args[2]
+            self.assertIn("missing_car",payload["validation_errors"])
+            self.assertEqual(payload["previous_implementation"],bad)
+            saved=json.loads((job.directory/"implementation_response_1.json").read_text())
+            self.assertEqual(saved,json.loads(json.dumps(bad)))
+            self.assertTrue((job.directory/"implementation_diagnostics_1.json").is_file())
+
+    def test_developer_contract_retries_are_bounded_and_do_not_swallow_service_errors(self):
+        request,spec,plan=examples("racing")
+        bad=plan.model_dump();bad["probes"][0]["assertions"][0]["object_id"]="missing_car"
+        service=SimpleNamespace(job=SimpleNamespace(data={"request":request}),json=AsyncMock(return_value=bad))
+        with self.assertRaisesRegex(ValueError,"after 3 attempts.*missing_car"):
+            asyncio.run(UnityDeveloper().implement(service,spec,{},{}))
+        self.assertEqual(service.json.await_count,3)
+        service.json=AsyncMock(side_effect=RuntimeError("authentication rejected"))
+        with self.assertRaisesRegex(RuntimeError,"authentication rejected"):
+            asyncio.run(UnityDeveloper().implement(service,spec,{},{}))
+        service.json.assert_awaited_once()
+
     def test_3d_models_cannot_use_image_workflow(self):
         _,spec,_=examples("racing")
         value=spec.model_dump()
@@ -103,8 +162,19 @@ class FlexibleContractTests(unittest.TestCase):
             elif change=="scene":candidate.scenes.scenes[0].name="Substitute"
             elif change=="orientation":candidate.scenes.orientation="portrait"
             elif change=="scene_requirement":candidate.scenes.scenes[0].requirement_ids=["R99"]
-            else:candidate.probes[0].steps[0].object_id="missing"
+            else:candidate.probes[0].assertions[0].object_id="missing"
             with self.subTest(change=change),self.assertRaises(ValueError):validate_implementation(spec,candidate)
+
+    def test_scene_validation_requires_a_camera_and_one_graphic_per_ui_object(self):
+        _,spec,plan=examples("puzzle")
+        plan.scenes.scenes[0].objects[0].components=[]
+        with self.assertRaisesRegex(ValueError,"must explicitly declare a Camera"):
+            validate_implementation(spec,plan)
+        _,spec,plan=examples("puzzle")
+        puzzle=next(obj for obj in plan.scenes.scenes[0].objects if obj.id=="puzzle")
+        puzzle.components.extend([FlexibleComponent(type="Image"),FlexibleComponent(type="Text")])
+        with self.assertRaisesRegex(ValueError,"multiple UGUI Graphic"):
+            validate_implementation(spec,plan)
 
     def test_claimed_implementation_cannot_pass_without_runtime_evidence(self):
         _,spec,plan=examples("puzzle")
@@ -137,12 +207,59 @@ class FlexibleContractTests(unittest.TestCase):
             plan.scripts.scripts[0].content+=" // System.IO.File"
             with self.assertRaises(ValueError):save_implementation(job,project,spec,plan)
 
+    def test_save_implementation_autowires_named_required_component_references(self):
+        request,spec,plan=examples("puzzle")
+        scene=plan.scenes.scenes[0]
+        scene.objects.extend([
+            FlexibleObject.model_validate(dict(id="collector",name="Collector",position=[0,0,0],components=[dict(type="CoinCollector")])),
+            FlexibleObject.model_validate(dict(id="coin",name="Coin",position=[0,0,0],components=[dict(type="Coin")])),
+            FlexibleObject.model_validate(dict(id="scoreText",name="Score",position=[0,0,0],components=[dict(type="Text")])),
+            FlexibleObject.model_validate(dict(id="winText",name="Win",position=[0,0,0],components=[dict(type="UnityEngine.UI.Text")])),
+            FlexibleObject.model_validate(dict(id="touchButton",name="Touch Button",position=[0,0,0],components=[dict(type="Image"),dict(type="Button")])),
+        ])
+        plan.scripts.scripts.extend([
+            ScriptFile(filename="CoinCollector.cs",content="using UnityEngine; using UnityEngine.UI; public class CoinCollector : MonoBehaviour { public Text scoreText; public Text winText; }"),
+            ScriptFile(filename="Coin.cs",content="using UnityEngine; public class Coin : MonoBehaviour { public CoinCollector collector; }"),
+        ])
+        with tempfile.TemporaryDirectory() as temp:
+            job=Job.create(request,2,root=Path(temp));project=job.directory/"UnityProject"
+            save_implementation(job,project,spec,plan)
+            props={obj.id:{prop.name:prop.value for component in obj.components for prop in component.properties}
+                   for obj in scene.objects}
+            self.assertEqual(props["collector"]["scoreText"],"scoreText:Text")
+            self.assertEqual(props["collector"]["winText"],"winText:UnityEngine.UI.Text")
+            self.assertEqual(props["coin"]["collector"],"collector:CoinCollector")
+            ui_components={component.type.rsplit(".",1)[-1] for obj in scene.objects for component in obj.components}
+            self.assertIn("EventSystem",ui_components)
+            self.assertIn("InputSystemUIInputModule",ui_components)
+            self.assertEqual(autowire_named_component_references(plan),[])
+
 
 class FlexibleWorkflowTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        backend=patch.dict(os.environ,{"STUDIO_UNITY_MODE":"batch","STUDIO_UNITY_MCP_ENABLED":"0"})
+        backend.start();self.addCleanup(backend.stop)
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name)
         self.studio=Supervisor(self.root)
+
+    async def test_resume_uses_saved_files_without_regenerating_the_game(self):
+        request,spec,plan=examples("racing")
+        job=Job.create(request,2,root=self.root);self.studio.job=job
+        job.data["tasks"]=[dict(role=r,name=n,dependencies=d,status="pending") for r,n,d in TASKS]
+        project=job.directory/"UnityProject"
+        save_implementation(job,project,spec,plan)
+        file=project/"Assets/Studio/Generated/RaceCar.cs"
+        file.write_text(file.read_text()+"\n// saved local repair")
+        write_json(job.directory/"art_manifest.json",[])
+        job.data["resume_implementation"]=True
+        with patch.object(self.studio.agents["art"],"create",AsyncMock()) as art,patch.object(
+                self.studio.agents["developer"],"implement",AsyncMock()) as generate,patch.object(
+                self.studio.agents["qa"],"review_implementation",AsyncMock(side_effect=RuntimeError("stop after resume inspection"))) as review:
+            with self.assertRaisesRegex(RuntimeError,"stop after resume inspection"):
+                await build_flexible(self.studio,SimpleNamespace(job=job),spec,project,None,False)
+        art.assert_not_awaited();generate.assert_not_awaited()
+        self.assertIn("saved local repair",review.await_args.args[2].scripts.scripts[0].content)
 
     async def test_create_plans_all_genres_and_preserves_distinct_game_specs(self):
         specs=[]

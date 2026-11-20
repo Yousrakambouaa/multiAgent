@@ -1,0 +1,241 @@
+{
+  "version": 2,
+  "name": "Coin Collector",
+  "genre": "2D Arcade Collection",
+  "dimension": "2D",
+  "camera_perspective": "Fixed orthographic side view, camera looking at the 2D plane with the ground at the bottom of the screen.",
+  "target_platform": "Mobile (Android/iOS) with PC testing support",
+  "orientation": "landscape",
+  "art_style": "Minimal flat solid-color shapes using Unity built-in sprites (white square/coin textures tinted with solid colors). No textures, no gradients, no external assets.",
+  "palette": [
+    "blue",
+    "green",
+    "yellow",
+    "white",
+    "black"
+  ],
+  "mechanics": [
+    "Player moves left and right",
+    "Player jumps",
+    "Coin collection increases score by 1",
+    "Coin removed on collection",
+    "Win condition when all 5 coins collected"
+  ],
+  "controls": [
+    "Keyboard: Left/Right arrows or A/D to move left/right",
+    "Keyboard: Space or Up arrow to jump",
+    "Mobile: On-screen left and right touch buttons to move",
+    "Mobile: On-screen jump touch button to jump"
+  ],
+  "level_structure": "Single flat green ground spanning the width of the screen. Player blue square rests on the ground. Five yellow coins are placed above the ground at different horizontal positions, reachable by jumping. No enemies, no obstacles, one level only.",
+  "ui_requirements": [
+    "Score text displaying current score (e.g., 'Score: 0')",
+    "Win text displaying 'YOU WIN!' when all 5 coins are collected",
+    "Simple touch buttons for mobile (left, right, jump) with solid color backgrounds and text labels"
+  ],
+  "scenes": [
+    "MainGame"
+  ],
+  "required_assets": [],
+  "requirements": [
+    {
+      "id": "R01",
+      "original_instruction": "create Create a very simple 2D mobile game called Coin Collector.",
+      "implementation": "Set up a Unity 2D project with a single scene named MainGame. The game title is Coin Collector, displayed in the UI as a simple text label at the top of the screen.",
+      "owner": "designer",
+      "verification_method": "manual"
+    },
+    {
+      "id": "R02",
+      "original_instruction": "The player is a blue square that moves left and right and jumps on a flat green ground.",
+      "implementation": "Create a player GameObject as a square sprite (Unity built-in white square tinted blue) with a Rigidbody2D and BoxCollider2D. Implement horizontal movement via velocity and jumping via vertical impulse when grounded. The ground is a flat green rectangle sprite with a BoxCollider2D, positioned at the bottom of the screen.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R03",
+      "original_instruction": "Place 5 yellow coins above the ground.",
+      "implementation": "Create 5 coin GameObjects, each a circle sprite (Unity built-in circle tinted yellow) with a CircleCollider2D. Position them at various heights above the ground, spaced horizontally so they are reachable by jumping. Coins are static and do not move.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R04",
+      "original_instruction": "Collecting a coin increases the score by 1 and removes the coin.",
+      "implementation": "Implement a score variable (integer) initialized to 0. When the player's collider overlaps a coin's collider (OnTriggerEnter2D), increment score by 1, destroy the coin GameObject, and update the score UI text.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R05",
+      "original_instruction": "When all 5 coins are collected, display \"YOU WIN!\".",
+      "implementation": "After each coin collection, check if score equals 5. If true, display a UI Text element with the exact string 'YOU WIN!' centered on the screen. The game continues but no further actions are needed.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R06",
+      "original_instruction": "Use only Unity built-in shapes, solid colors, and a simple text UI.",
+      "implementation": "All visual elements use Unity's built-in sprite shapes (Square and Circle) with solid color materials. No textures, no external images, no gradients. UI uses Unity's Text (legacy) or TextMeshPro with default font and solid color.",
+      "owner": "art",
+      "verification_method": "manual"
+    },
+    {
+      "id": "R07",
+      "original_instruction": "One scene, one level, no enemies, no textures, no external assets, no animations, and no sound.",
+      "implementation": "The project contains exactly one scene (MainGame) and one level. No enemy GameObjects, no texture assets, no external asset imports, no Animator components or animation clips, and no AudioSource or audio files. All code and configuration stays within the single scene.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R08",
+      "original_instruction": "Keep everything minimal, functional, and easy to test.",
+      "implementation": "Use simple scripts with clear public variables for speed and jump force. Ensure the game can be run and tested in the Unity Editor with keyboard input. Provide a simple test checklist: move left/right, jump, collect all coins, verify win text.",
+      "owner": "qa",
+      "verification_method": "manual"
+    },
+    {
+      "id": "R09",
+      "original_instruction": "Use keyboard controls for PC testing and simple touch buttons for mobile.",
+      "implementation": "Implement input handling that reads keyboard (arrow keys/A/D for movement, Space/Up for jump) when running on PC/Editor. On mobile, display three on-screen touch buttons (left, right, jump) that set the same movement/jump inputs. Use Unity's Input class or new Input System with fallback.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T01",
+      "description": "Create the Unity project structure with a single scene named MainGame. Set up the camera as orthographic, background solid color (e.g., white or light gray).",
+      "owner": "developer",
+      "dependencies": [],
+      "requirement_ids": [
+        "R01",
+        "R07"
+      ]
+    },
+    {
+      "id": "T02",
+      "description": "Create the player blue square GameObject with Rigidbody2D, BoxCollider2D, and a movement script. Implement horizontal movement and jumping with ground detection.",
+      "owner": "developer",
+      "dependencies": [
+        "T01"
+      ],
+      "requirement_ids": [
+        "R02",
+        "R09"
+      ]
+    },
+    {
+      "id": "T03",
+      "description": "Create the flat green ground GameObject with BoxCollider2D and position it at the bottom of the screen.",
+      "owner": "developer",
+      "dependencies": [
+        "T01"
+      ],
+      "requirement_ids": [
+        "R02"
+      ]
+    },
+    {
+      "id": "T04",
+      "description": "Create 5 yellow coin GameObjects with CircleCollider2D (set as triggers) and position them above the ground at reachable heights.",
+      "owner": "developer",
+      "dependencies": [
+        "T01"
+      ],
+      "requirement_ids": [
+        "R03"
+      ]
+    },
+    {
+      "id": "T05",
+      "description": "Implement the coin collection script: on trigger enter with player, increment score, destroy coin, update UI score text, and check win condition.",
+      "owner": "developer",
+      "dependencies": [
+        "T02",
+        "T04"
+      ],
+      "requirement_ids": [
+        "R04",
+        "R05"
+      ]
+    },
+    {
+      "id": "T06",
+      "description": "Create the UI canvas with score text (top-left) and win text (center, initially hidden). Use Unity UI Text with default font.",
+      "owner": "developer",
+      "dependencies": [
+        "T01"
+      ],
+      "requirement_ids": [
+        "R01",
+        "R05",
+        "R06"
+      ]
+    },
+    {
+      "id": "T07",
+      "description": "Implement mobile touch buttons: create three UI buttons (left, right, jump) with solid color backgrounds and text labels. Wire them to set movement and jump flags in the player script.",
+      "owner": "developer",
+      "dependencies": [
+        "T02",
+        "T06"
+      ],
+      "requirement_ids": [
+        "R09"
+      ]
+    },
+    {
+      "id": "T08",
+      "description": "Review all visual elements to ensure they use only Unity built-in shapes and solid colors. Confirm no textures, external assets, animations, or sound are present.",
+      "owner": "art",
+      "dependencies": [
+        "T02",
+        "T03",
+        "T04",
+        "T06",
+        "T07"
+      ],
+      "requirement_ids": [
+        "R06",
+        "R07"
+      ]
+    },
+    {
+      "id": "T09",
+      "description": "Test the game in the Unity Editor: verify player moves left/right with keyboard, jumps, collects coins, score increments, coins disappear, and win text appears after 5 coins. Also test mobile touch buttons in a build or using simulated input.",
+      "owner": "qa",
+      "dependencies": [
+        "T05",
+        "T07",
+        "T08"
+      ],
+      "requirement_ids": [
+        "R08",
+        "R09"
+      ]
+    }
+  ],
+  "assumptions": [
+    "The game uses Unity's built-in sprite shapes (Square and Circle) with solid color materials; no external sprite assets are needed.",
+    "The camera is orthographic and fixed, showing the entire level in landscape orientation.",
+    "The player square is approximately 1x1 units, ground is a thin rectangle spanning the screen width.",
+    "Coins are placed at heights reachable by a single jump from the ground, with horizontal spacing.",
+    "The score UI is displayed as 'Score: X' in the top-left corner.",
+    "The win text is displayed centered on the screen when all coins are collected.",
+    "Mobile touch buttons are always visible on screen, but keyboard input works when running in the Editor or on PC.",
+    "The game uses Unity's legacy Input Manager for simplicity, with keyboard and touch buttons both setting the same input values.",
+    "No physics materials are used; the player has a simple Rigidbody2D with gravity and a jump impulse.",
+    "The game is a single scene with no scene transitions or menus."
+  ],
+  "clarification_questions": [],
+  "limitations": [
+    "No external assets, textures, animations, or sound are used, as requested.",
+    "The game is minimal and does not include features like pause, restart, or high scores.",
+    "The player cannot move beyond the screen edges; the ground is static.",
+    "The win condition is permanent; after winning, the game remains in the same state.",
+    "Touch buttons are simple and not optimized for different screen sizes, but functional.",
+    "The game uses Unity's built-in shapes, which may look basic but meet the requirement.",
+    "No 3D models or complex geometry are used."
+  ]
+}

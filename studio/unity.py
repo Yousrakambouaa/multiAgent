@@ -5,6 +5,7 @@ import re
 import shutil
 import time
 import os
+import subprocess
 import xml.etree.ElementTree as ET
 import logging
 from pathlib import Path
@@ -27,8 +28,41 @@ class UnityFailure(RuntimeError):
         self.stage, self.owner = stage, owner
 
 
+def compiler_errors(output):
+    """Extract and deduplicate Unity/Roslyn diagnostics without licensing chatter."""
+    location_pattern = re.compile(r"(?P<file>Assets[\\/][^:\r\n]*?\.cs)\((?P<line>\d+)(?:,(?P<column>\d+))?\):")
+    code_pattern = re.compile(r"\b(?:error\s+)?(?P<code>CS\d+):\s*(?P<message>[^\r\n]+)")
+    unique = {}
+    for line in output.splitlines():
+        code = code_pattern.search(line)
+        location = location_pattern.search(line)
+        if not code or not location:
+            continue
+        item = {"file": location.group("file").replace("\\", "/"),
+                "line": int(location.group("line")),
+                "column": int(location.group("column") or 0),
+                "code": code.group("code"), "message": code.group("message")}
+        unique[tuple(item.values())] = item
+    return list(unique.values())
+
+
+def licensing_status(output):
+    recovered = bool(re.search(r"Successfully (?:updated license|resolved entitlement details)|License group:", output, re.I))
+    blocked = bool(re.search(r"No valid (?:Unity )?license|No valid entitlement|Failed to activate|"
+                             r"Failed to acquire global mutex.*License|license.*(?:unavailable|expired)", output, re.I))
+    warnings = [line for line in output.splitlines() if re.search(r"Licensing.*(?:failed|Error:)", line, re.I)]
+    return {"status": "available" if recovered else "blocked" if blocked else "unverified",
+            "warnings": warnings[:10], "manual_action": "Sign in to Unity Hub and activate/refresh a license" if blocked and not recovered else ""}
+
+
 def unity_failure_owner(stage, output):
+    errors = compiler_errors(output)
+    if errors:
+        return "developer" if all(e["file"].startswith("Assets/Studio/Generated/") for e in errors) else "infrastructure"
     owner = "scene" if stage == "assembly" else "qa" if stage in ("EditMode", "PlayMode") else "developer"
+    # Recoverable license-client noise must not suppress scene/runtime repairs.
+    if licensing_status(output)["status"] == "available":
+        output = "\n".join(line for line in output.splitlines() if "Licensing" not in line)
     if re.search(r"Assets[\\/]+Studio[\\/]+(Runtime|Editor|Tests)[\\/].*error CS", output):
         owner = "infrastructure"
     if ("another Unity instance" in output or "already open" in output
@@ -40,6 +74,105 @@ def unity_failure_owner(stage, output):
            ("not enough space", "Internal build system error", "The backend process appears", "No space left")):
         owner = "infrastructure"
     return owner
+
+
+def project_is_open(project):
+    """Probe Unity's held lock, allowing stale lockfiles left after a crash."""
+    path = Path(project) / "Temp/UnityLockfile"
+    if not path.exists():
+        return False
+    try:
+        with path.open("r+b") as handle:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(handle, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+
+
+def mcp_enabled():
+    return os.environ.get("STUDIO_UNITY_MCP_ENABLED", "1").casefold() in ("1", "true", "yes")
+
+
+def uses_live_editor(mode, opened=False):
+    if mode == "live":
+        return True
+    return mode == "auto" and (opened or mcp_enabled())
+
+
+async def ensure_live_editor(job, project, timeout=None):
+    """Open this job in the visible Editor once and wait for its matching MCP bridge."""
+    from studio.mcp_client import UnityMCPClient, wait_for_project
+
+    project = Path(project).resolve()
+    if not project.is_dir():
+        raise UnityFailure("project_setup", f"Unity project folder does not exist: {project}", "infrastructure")
+    try:
+        configured_timeout = float(os.environ.get("STUDIO_UNITY_STARTUP_TIMEOUT", "240"))
+        requested_timeout = float(timeout) if timeout is not None else configured_timeout
+    except (TypeError, ValueError) as error:
+        raise UnityFailure("project_setup", "STUDIO_UNITY_STARTUP_TIMEOUT must be a number of seconds", "infrastructure") from error
+    if not 30 <= configured_timeout <= 900:
+        raise UnityFailure("project_setup", "STUDIO_UNITY_STARTUP_TIMEOUT must be between 30 and 900 seconds", "infrastructure")
+    startup_timeout = min(configured_timeout, requested_timeout)
+    client = UnityMCPClient.from_environment()
+    if client is None:
+        raise UnityFailure("project_setup", "Live Editor mode requires Unity MCP; set STUDIO_UNITY_MCP_ENABLED=1", "infrastructure")
+
+    deadline = time.monotonic() + startup_timeout
+    process = None
+    if not project_is_open(project):
+        if not UNITY.is_file():
+            await client.close()
+            raise UnityFailure("project_setup", f"Configured Unity Editor does not exist: {UNITY}", "infrastructure")
+        job.check_cancelled()
+        editor_log = job.directory / "unity-editor-live.log"
+        command = [str(UNITY), "-projectPath", str(project), "-logFile", str(editor_log)]
+        environment = os.environ.copy()
+        environment.pop("OPENROUTER_API_KEY", None)
+        environment.pop("TELEGRAM_BOT_TOKEN", None)
+        job.event("supervisor", "unity_editor_opening", project=str(project), log=str(editor_log))
+        try:
+            # No -batchmode or -quit: this is the visible Editor the user will work with.
+            process = subprocess.Popen(command, cwd=project, env=environment,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as error:
+            await client.close()
+            raise UnityFailure("project_setup", f"Could not open the Unity Editor: {error}", "infrastructure") from error
+    else:
+        job.event("supervisor", "unity_editor_reused", project=str(project))
+
+    try:
+        while not project_is_open(project):
+            job.check_cancelled()
+            if process is not None and process.poll() is not None:
+                detail = ""
+                if editor_log.is_file():
+                    detail = editor_log.read_text(encoding="utf-8", errors="replace")[-3000:]
+                raise UnityFailure("project_setup", "Unity Editor exited before opening this project. " + detail, "infrastructure")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise UnityFailure("project_setup", f"Unity Editor did not open {project} within {startup_timeout:g}s", "infrastructure")
+            await asyncio.sleep(min(.5, remaining))
+
+        job.check_cancelled()
+        client.timeout = min(90, max(client.timeout, deadline - time.monotonic()))
+        await client.connect()
+        remaining = max(0, deadline - time.monotonic())
+        await wait_for_project(client, project, timeout=remaining, check_cancelled=job.check_cancelled)
+        job.event("supervisor", "unity_editor_ready", project=str(project), pid=process.pid if process else None)
+    except Exception as error:
+        if isinstance(error, (UnityFailure, JobCancelled)):
+            raise
+        raise UnityFailure("project_setup", f"Unity Editor opened but its MCP bridge did not connect: {error}", "infrastructure") from error
+    finally:
+        await client.close()
 
 
 def available_space(path):
@@ -76,6 +209,8 @@ def bootstrap(job):
             target = safe_path(project / "Assets" / "Studio", source.relative_to(TEMPLATES).as_posix())
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+    from studio.mcp_setup import prepare_mcp_project
+    prepare_mcp_project(project)
     (project / "Assets" / "Resources").mkdir(parents=True, exist_ok=True)
     (project / "Assets" / "Studio" / "Generated").mkdir(exist_ok=True)
     job.event("developer", "project_initialized", project=str(project.relative_to(ROOT)))
@@ -120,6 +255,19 @@ class UnityRunner:
         return path.is_file() and json.loads(path.read_text(encoding="utf-8")).get("version") == 2
 
     async def run(self, stage, extra, timeout=600, graphics=False):
+        mode = os.environ.get("STUDIO_UNITY_MODE", "auto").lower()
+        opened = project_is_open(self.project)
+        if mode == "auto" and not opened and not mcp_enabled():
+            mode = "batch"
+        if uses_live_editor(mode, opened):
+            if not opened:
+                await ensure_live_editor(self.job, self.project, timeout=timeout)
+            from studio.unity_live import run_live
+            return await run_live(self, stage, extra, timeout)
+        if mode != "batch":
+            raise UnityFailure(stage, "STUDIO_UNITY_MODE must be auto, batch or live", "infrastructure")
+        if opened:
+            raise UnityFailure(stage, "Project is already open in Unity. Use STUDIO_UNITY_MODE=live with its MCP bridge; batch mode was not launched.", "infrastructure")
         if not UNITY.is_file():
             raise UnityFailure(stage, "Configured Unity Editor does not exist", "infrastructure")
         self.job.check_cancelled()
@@ -153,6 +301,7 @@ class UnityRunner:
                 await process.wait()
             raise
         output = log.read_text(encoding="utf-8", errors="replace") if log.exists() else "Unity did not write a log"
+        write_json(self.job.directory / "unity_licensing.json", licensing_status(output))
         if process.returncode != 0 or re.search(r"error CS\d+|Scripts have compiler errors|Aborting batchmode due to failure|Fatal Error", output):
             lines = [line for line in output.splitlines() if re.search(r"error CS|Exception|Error|error |Aborting|already open|Failed|failed|enough space|Internal build system|backend process", line)]
             owner = unity_failure_owner(stage, output)

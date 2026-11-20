@@ -1,4 +1,4 @@
-"""Only explicitly configured, freshly priced models can receive paid work."""
+"""Prefer configured models, then discover compatible, freshly priced fallbacks."""
 import json
 import os
 import math
@@ -8,6 +8,7 @@ import httpx
 
 from studio.config import CACHE, ROOT
 from studio.state import write_json
+from studio.openrouter import api_key, authentication_error, validate_inference_key
 
 DEFAULTS = {
     "supervisor": ["~deepseek/deepseek-v4-flash-latest", "deepseek/deepseek-v4.1-flash"],
@@ -30,8 +31,19 @@ class Registry:
 
     async def refresh(self):
         self.models, self.images = {}, {}
+        self.verified_at = None
+        headers = {"Authorization": "Bearer " + api_key()}
         async with httpx.AsyncClient(timeout=40) as client:
-            response = await client.get("https://openrouter.ai/api/v1/models")
+            # Validate the key without a completion or a spending reservation.
+            response = await client.get("https://openrouter.ai/api/v1/key", headers=headers)
+            if response.status_code == 401:
+                raise RuntimeError(authentication_error())
+            response.raise_for_status()
+            validate_inference_key(response.json().get("data"))
+            # This catalog applies the active key's provider/privacy/guardrail settings.
+            response = await client.get("https://openrouter.ai/api/v1/models/user", headers=headers)
+            if response.status_code == 401:
+                raise RuntimeError(authentication_error())
             response.raise_for_status()
             self.models = {m["id"]: m for m in response.json()["data"]}
             for model_id in self.roles["art"]:
@@ -48,17 +60,38 @@ class Registry:
         write_json(CACHE / "models.json", dict(verified_at=self.verified_at, models=self.models, images=self.images))
 
     def candidates(self, role):
-        for mid in self.roles[role]:
-            if role == "art":
+        configured = self.roles.get(role, [])
+        if role == "art":
+            for mid in configured:
                 if mid in self.images:
                     yield mid
-            else:
-                model = self.models.get(mid)
-                if model and "response_format" in model.get("supported_parameters", []):
-                    # Reject unexpectedly expensive configuration changes.
-                    rates = self.rates(mid)
-                    if rates[0] <= 0.000002 and rates[1] <= 0.000005:
-                        yield mid
+            return
+        seen = set()
+        for mid in configured:
+            if mid not in seen and self.text_eligible(mid):
+                seen.add(mid)
+                yield mid
+        if os.environ.get("STUDIO_AUTO_MODEL_FALLBACK", "1") == "1":
+            discovered = [mid for mid, model in self.models.items() if mid not in seen
+                          and model.get("context_length", 0) >= 32768 and self.text_eligible(mid)]
+            # Keep the attempt count bounded. Free/cheaper models allow restricted
+            # accounts to keep working; code profiles prefer coding models on ties.
+            discovered.sort(key=lambda mid: (sum(self.rates(mid)),
+                0 if role in ("developer", "scene", "qa") and "coder" in mid else 1, mid))
+            yield from discovered[:3]
+
+    def text_eligible(self, mid):
+        model = self.models.get(mid)
+        if not model or "response_format" not in model.get("supported_parameters", []):
+            return False
+        if "text" not in model.get("architecture", {}).get("output_modalities", ["text"]):
+            return False
+        try:
+            prompt, completion = self.rates(mid)
+            request = float(model["pricing"].get("request", 0))
+            return prompt <= .000002 and completion <= .000005 and math.isfinite(request) and 0 <= request <= .01
+        except (KeyError, TypeError, ValueError):
+            return False
 
     def rates(self, mid):
         pricing = self.models[mid]["pricing"]

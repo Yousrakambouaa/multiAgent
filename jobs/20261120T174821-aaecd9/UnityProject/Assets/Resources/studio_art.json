@@ -1,0 +1,33 @@
+{
+  "assets": [
+    {
+      "id": "mountain_background",
+      "kind": "texture",
+      "path": "Assets/Studio/Art/mountain_background.png",
+      "width": 1920,
+      "height": 1080,
+      "pixels_per_unit": 128,
+      "source": "OpenRouter image generation",
+      "model": "recraft/recraft-v4.1-flash",
+      "prompt": "2D game production asset. Minimalist flat design with a single green square sprite over a photographic-style mountain landscape background. Consistent palette: green, mountain gray, sky blue, white. A scenic mountain landscape background image, with layered mountain silhouettes, sky, and natural colors, suitable for a 2D game environment. Single asset, no text, no watermark, no sprite sheet, no collage. Wide seamless atmospheric backdrop with quiet lower foreground.",
+      "slicing": "single sprite; no sheet slicing assumed",
+      "cache_hit": false,
+      "status": "ready",
+      "requirement_ids": [
+        "R2"
+      ]
+    },
+    {
+      "id": "green_square",
+      "kind": "sprite",
+      "requirement_ids": [
+        "R1"
+      ],
+      "status": "unavailable",
+      "source": "unavailable",
+      "path": "",
+      "license": "",
+      "reason": "No configured tool or licensed asset can produce this requested asset"
+    }
+  ]
+}

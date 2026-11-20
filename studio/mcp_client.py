@@ -8,7 +8,9 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
+from uuid import uuid4
 
 from studio.config import JOBS, ROOT
 
@@ -17,16 +19,17 @@ PROTOCOL_VERSION = "2025-11-25"
 SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
 PROBE_SCENE_NAME = "StudioMCPProbeScene"
 PROBE_SCENE_PATH = "Assets/Studio/Generated/StudioMCPProbeScene.unity"
-PROBE_ASSET_PATH = "Assets/Studio/Generated/StudioMCPProbe.mat"
+PROBE_ASSET_PREFIX = "Assets/Studio/Generated/StudioMCPProbe-"
 PROBE_OBJECT_NAME = "StudioMCPProbe"
+_ENVIRONMENT_CLIENTS = []
 
 # Permissions follow the five existing agents. Tools are never new agent roles.
 AGENT_TOOLS = {
     "supervisor": {"manage_scene", "find_gameobjects", "read_console"},
-    "designer": {"manage_scene", "find_gameobjects"},
-    "developer": {"manage_scene", "manage_gameobject", "manage_components", "manage_asset", "find_gameobjects"},
+    "designer": {"manage_scene", "manage_camera", "find_gameobjects"},
+    "developer": {"manage_scene", "manage_gameobject", "manage_components", "manage_asset", "find_gameobjects", "refresh_unity", "execute_menu_item"},
     "art": {"manage_asset"},
-    "qa": {"manage_scene", "find_gameobjects", "read_console", "validate_script", "run_tests", "get_test_job"},
+    "qa": {"manage_scene", "manage_camera", "find_gameobjects", "read_console", "validate_script", "run_tests", "get_test_job", "refresh_unity"},
 }
 AGENT_ACTIONS = {
     "supervisor": {
@@ -35,6 +38,7 @@ AGENT_ACTIONS = {
     },
     "designer": {
         "manage_scene": {"get_active", "get_hierarchy", "get_build_settings", "get_loaded_scenes"},
+        "manage_camera": {"screenshot"},
         "find_gameobjects": {None},
     },
     "developer": {
@@ -43,12 +47,15 @@ AGENT_ACTIONS = {
         "manage_components": {"add", "set_property"},
         "manage_asset": {"search", "create", "import", "delete"},
         "find_gameobjects": {None},
+        "refresh_unity": {None}, "execute_menu_item": {None},
     },
     "art": {"manage_asset": {"search", "create", "import", "delete"}},
     "qa": {
         "manage_scene": {"get_active", "get_hierarchy", "get_build_settings", "get_loaded_scenes", "validate"},
+        "manage_camera": {"screenshot"},
         "find_gameobjects": {None}, "read_console": {"get"},
         "validate_script": {None}, "run_tests": {None}, "get_test_job": {None},
+        "refresh_unity": {None},
     },
 }
 SAFE_TOOLS = set().union(*AGENT_TOOLS.values())
@@ -56,6 +63,33 @@ SAFE_TOOLS = set().union(*AGENT_TOOLS.values())
 
 class MCPError(RuntimeError):
     """A bounded connection, permission, or Unity-tool failure."""
+
+
+def transient_editor_error(error):
+    text = str(error).casefold()
+    return any(marker in text for marker in (
+        "no unity editor instances found", "no unity instance found", "no unity instances are currently connected",
+        "no unity editor instances are connected", "connection refused",
+        "connection lost", "connection reset", "domain reload", "editor is busy", "editor is reloading"))
+
+
+async def wait_for_project(client, project, timeout=90, check_cancelled=None):
+    """Wait through bridge/domain reload gaps without accepting another project."""
+    deadline = time.monotonic() + max(0, timeout)
+    while True:
+        if check_cancelled:
+            check_cancelled()
+        try:
+            return await client.verify_project(project)
+        except MCPError as error:
+            if not transient_editor_error(error):
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise MCPError(f"Unity MCP bridge did not reconnect to {project} within {timeout:g}s. "
+                    "The saved game and repairs are preserved; no conflicting batch Editor was launched. "
+                    "Check the project's StudioMCP startup and Editor logs.") from error
+            await asyncio.sleep(min(1, remaining))
 
 
 def _content_value(result):
@@ -81,8 +115,18 @@ def _check_tool_error(result, tool_name):
         raise MCPError(f"Unity MCP tool {tool_name} failed: {str(content or 'unknown tool error')[:500]}")
     value = _content_value(result)
     if isinstance(value, dict) and value.get("success") is False:
-        raise MCPError(f"Unity MCP tool {tool_name} failed: {str(value.get('message', value))[:500]}")
+        reason = value.get("message") or value.get("error") or value.get("code") or value
+        raise MCPError(f"Unity MCP tool {tool_name} failed: {str(reason)[:500]}")
     return value
+
+
+def _gameobject_ids(value):
+    if not isinstance(value, dict):
+        return []
+    ids = value.get("ids")
+    if not isinstance(ids, list):
+        ids = value.get("instanceIDs")
+    return ids if isinstance(ids, list) else []
 
 
 def _authorized_project_root(value):
@@ -91,6 +135,12 @@ def _authorized_project_root(value):
     if not root.is_relative_to(jobs_root) or root.name != "UnityProject":
         raise MCPError("MCP access is limited to a job's UnityProject folder")
     return root
+
+
+def _mcp_instance_project_root(value):
+    """MCP for Unity advertises its instance path as <project>/Assets on current releases."""
+    path = Path(value).resolve()
+    return path.parent if path.name.casefold() == "assets" else path
 
 
 class MCPAgentTools:
@@ -121,12 +171,17 @@ class UnityMCPClient:
         self._next_id = 0
         self.tools = {}
         self.server_info = None
+        self._smoke_asset_path = None
+        self._smoke_object_ids = set()
+        self._persistent = False
+        self._environment_signature = None
+        self._active_instance_id = None
         self._lock = asyncio.Lock()
         self._stderr_task = None
 
     @classmethod
     def from_environment(cls):
-        if os.environ.get("STUDIO_UNITY_MCP_ENABLED", "0").casefold() not in ("1", "true", "yes"):
+        if os.environ.get("STUDIO_UNITY_MCP_ENABLED", "1").casefold() not in ("1", "true", "yes"):
             return None
         command = os.environ.get("STUDIO_UNITY_MCP_COMMAND", "uvx").strip()
         raw = os.environ.get("STUDIO_UNITY_MCP_ARGS_JSON", '["--from","mcpforunityserver==10.3.0","mcp-for-unity"]')
@@ -139,8 +194,16 @@ class UnityMCPClient:
             raise MCPError("STUDIO_UNITY_MCP_ARGS_JSON must be a JSON string array")
         if Path(command).stem.lower() == "uvx" and "--python" not in args:
             args = ["--python", sys.executable, *args]
+        signature = (command, tuple(args), timeout)
+        for client in _ENVIRONMENT_CLIENTS:
+            if client._environment_signature == signature:
+                return client
         try:
-            return cls(command, args, timeout)
+            client = cls(command, args, timeout)
+            client._persistent = True
+            client._environment_signature = signature
+            _ENVIRONMENT_CLIENTS.append(client)
+            return client
         except ValueError as error:
             raise MCPError(str(error)) from error
 
@@ -148,6 +211,7 @@ class UnityMCPClient:
         if self.process and self.process.returncode is None:
             return self
         try:
+            self._active_instance_id = None
             # argv-based startup: no shell is involved, so prompt text cannot form commands.
             self.process = await asyncio.create_subprocess_exec(
                 self.command, *self.args, stdin=asyncio.subprocess.PIPE,
@@ -188,12 +252,12 @@ class UnityMCPClient:
             log.info("Unity MCP connected server=%s discovered_tools=%d", self.server_info.get("name", "unknown"), len(self.tools))
             return self
         except (OSError, ValueError, asyncio.TimeoutError) as error:
-            await self.close()
+            await self.close(force=True)
             if isinstance(error, MCPError):
                 raise
             raise MCPError(f"Could not start or initialize Unity MCP server ({type(error).__name__})") from error
         except Exception:
-            await self.close()
+            await self.close(force=True)
             raise
 
     async def _drain_stderr(self):
@@ -251,7 +315,9 @@ class UnityMCPClient:
         await self._write({"jsonrpc": "2.0", "method": method, "params": params})
 
     async def read_resource(self, uri):
-        if uri != "mcpforunity://project/info":
+        smoke_object_uri = (isinstance(uri, str) and uri.startswith("mcpforunity://scene/gameobject/")
+            and uri.rsplit("/", 1)[-1] in self._smoke_object_ids)
+        if uri not in {"mcpforunity://project/info", "mcpforunity://editor/state", "mcpforunity://instances"} and not smoke_object_uri:
             raise MCPError("Only Unity project information can be read by this integration")
         result = await self._request("resources/read", {"uri": uri})
         for item in result.get("contents", []):
@@ -265,6 +331,8 @@ class UnityMCPClient:
             except json.JSONDecodeError:
                 continue
             if isinstance(value, dict):
+                if value.get("success") is False:
+                    raise MCPError(str(value.get("error") or value.get("message") or "Unity resource unavailable")[:500])
                 data = value.get("data", value)
                 if isinstance(data, dict):
                     return data
@@ -272,6 +340,35 @@ class UnityMCPClient:
 
     async def verify_project(self, expected_root):
         expected = _authorized_project_root(expected_root)
+        if "set_active_instance" in self.tools:
+            listing = await self.read_resource("mcpforunity://instances")
+            instances = listing.get("instances")
+            if isinstance(instances, list):
+                matches = [item for item in instances if isinstance(item, dict)
+                    and item.get("path") and _mcp_instance_project_root(item["path"]) == expected]
+                if not instances:
+                    self._active_instance_id = None
+                    raise MCPError("No Unity Editor instances found. Waiting for the project bridge.")
+                if not matches:
+                    raise MCPError("Connected Unity Editor does not match this job's UnityProject")
+                if len(matches) != 1 or not matches[0].get("id"):
+                    raise MCPError("Unity MCP found ambiguous instances for this project")
+                instance_id = matches[0]["id"]
+                # The Editor bridge can reset its active instance during a domain reload.
+                # Do not trust our per-process cache alone: verify the bridge's current
+                # context before allowing a tool call, then reselect the uniquely matched
+                # project if that context drifted.
+                try:
+                    editor_state = await self.read_resource("mcpforunity://editor/state")
+                except MCPError:
+                    editor_state = {}
+                unity_state = editor_state.get("unity") or {}
+                active_instance_id = unity_state.get("instance_id")
+                if self._active_instance_id != instance_id or active_instance_id != instance_id:
+                    selected = await self._request("tools/call", {"name": "set_active_instance",
+                        "arguments": {"instance": instance_id}})
+                    _check_tool_error(selected, "set_active_instance")
+                    self._active_instance_id = instance_id
         info = await self.read_resource("mcpforunity://project/info")
         root = info.get("projectRoot") or info.get("project_root")
         if not root or Path(root).resolve() != expected:
@@ -326,15 +423,20 @@ class UnityMCPClient:
         if name not in AGENT_ACTIONS[agent] or action not in AGENT_ACTIONS[agent][name]:
             raise MCPError("MCP operation is outside this agent's safe action allowlist")
         root = _authorized_project_root(project_root)
+        if name == "execute_menu_item" and arguments.get("menu_path") not in {
+                "Studio/Assemble prompt-driven scenes", "Studio/Assemble validated scenes"}:
+            raise MCPError("Only the existing Studio scene assemblers may be invoked")
         self._validate_asset_paths(arguments, root)
         if name == "manage_gameobject" and action == "delete":
             if arguments.get("target") != PROBE_OBJECT_NAME:
                 raise MCPError("GameObject deletion is reserved for the exact smoke-test object")
         if name == "manage_asset" and action == "delete":
-            allowed_probe_files = {PROBE_SCENE_PATH, PROBE_ASSET_PATH}
+            allowed_probe_files = {PROBE_SCENE_PATH}
+            if self._smoke_asset_path:
+                allowed_probe_files.add(self._smoke_asset_path)
             if arguments.get("path") not in allowed_probe_files:
                 raise MCPError("Asset deletion is reserved for the exact MCP smoke-test artifacts")
-            if agent == "art" and arguments.get("path") != PROBE_ASSET_PATH:
+            if agent == "art" and arguments.get("path") != self._smoke_asset_path:
                 raise MCPError("Art Designer cleanup is reserved for its exact MCP probe material")
             if agent == "developer" and arguments.get("path") != PROBE_SCENE_PATH:
                 raise MCPError("Unity Developer cleanup is reserved for its exact MCP probe scene")
@@ -371,14 +473,19 @@ class UnityMCPClient:
         await self.verify_project(project_root)
         project = _authorized_project_root(project_root)
         scene_file = project / PROBE_SCENE_PATH
-        asset_file = project / PROBE_ASSET_PATH
+        asset_path = PROBE_ASSET_PREFIX + uuid4().hex + ".mat"
+        asset_file = project / asset_path
+        asset_meta_file = asset_file.with_suffix(asset_file.suffix + ".meta")
         if not (project / "Assets/Studio/Generated").is_dir():
             raise MCPError("MCP smoke test requires the generated project's Assets/Studio/Generated folder")
-        if scene_file.exists() or asset_file.exists():
+        if scene_file.exists() or asset_file.exists() or asset_meta_file.exists():
             raise MCPError("A reserved MCP probe artifact already exists; refusing to overwrite it")
         developer = self.for_agent("developer", project)
         art = self.for_agent("art", project)
         qa = self.for_agent("qa", project)
+        designer = self.for_agent("designer", project)
+        supervisor = self.for_agent("supervisor", project)
+        await supervisor.call("manage_scene", {"action": "get_active"})
         active_result = await developer.call("manage_scene", {"action": "get_active"})
         original = _content_value(active_result)
         if not isinstance(original, dict) or original.get("isDirty") is not False:
@@ -394,16 +501,18 @@ class UnityMCPClient:
         scene_list = loaded.get("scenes") if isinstance(loaded, dict) else None
         if not isinstance(scene_list, list) or len(scene_list) != 1:
             raise MCPError("MCP smoke test requires exactly one loaded scene to preserve editor state")
+        await designer.call("manage_scene", {"action": "get_hierarchy", "page_size": 50, "cursor": 0})
         existing_probe = await qa.call("find_gameobjects", {
             "search_term": PROBE_OBJECT_NAME, "search_method": "by_name", "page_size": 5, "cursor": 0
         })
         existing_data = _content_value(existing_probe)
-        if isinstance(existing_data, dict) and existing_data.get("ids"):
+        if _gameobject_ids(existing_data):
             raise MCPError("MCP smoke test found an object using its reserved sentinel name in the original scene")
 
         scene_created = False
         object_created = False
         asset_created = False
+        self._smoke_asset_path = asset_path
         failures = []
         try:
             await developer.call("manage_scene", {
@@ -418,7 +527,7 @@ class UnityMCPClient:
                 "action": "add", "target": PROBE_OBJECT_NAME, "component_type": "Rigidbody"
             })
             await art.call("manage_asset", {
-                "action": "create", "path": PROBE_ASSET_PATH, "asset_type": "Material",
+                "action": "create", "path": asset_path, "asset_type": "Material",
                 "properties": {"color": [0.8, 0.2, 0.8, 1.0]},
             })
             asset_created = True
@@ -427,11 +536,18 @@ class UnityMCPClient:
                 "search_term": PROBE_OBJECT_NAME, "search_method": "by_name", "page_size": 5, "cursor": 0
             })
             value = _content_value(inspected)
-            if not isinstance(value, dict) or not value.get("ids"):
+            object_ids = _gameobject_ids(value)
+            if not object_ids:
                 raise MCPError("MCP scene inspection did not find the probe GameObject")
+            self._smoke_object_ids = {str(item) for item in object_ids}
+            object_info = await self.read_resource(f"mcpforunity://scene/gameobject/{object_ids[0]}")
+            component_types = object_info.get("componentTypes", object_info.get("component_types", []))
+            if not isinstance(component_types, list) or "Rigidbody" not in component_types:
+                raise MCPError("MCP scene inspection did not verify the probe Rigidbody component")
             await qa.call("read_console", {"action": "get", "types": ["error"], "count": 20})
-            return {"scene_created": PROBE_SCENE_PATH, "inspected_object_ids": value["ids"],
-                    "component_added": "Rigidbody", "asset_created": PROBE_ASSET_PATH,
+            return {"scene_created": PROBE_SCENE_PATH, "inspected_object_ids": object_ids,
+                    "component_added": "Rigidbody", "verified_component_types": component_types,
+                    "asset_created": asset_path,
                     "scene_hierarchy_checked": True, "error_console_checked": True}
         finally:
             if scene_created:
@@ -455,18 +571,23 @@ class UnityMCPClient:
                         await developer.call("manage_asset", {"action": "delete", "path": PROBE_SCENE_PATH})
                     except Exception as error:
                         failures.append(f"probe scene cleanup failed: {type(error).__name__}")
-                    if asset_created or asset_file.exists():
+                    if asset_created or asset_file.exists() or asset_meta_file.exists():
                         try:
-                            await art.call("manage_asset", {"action": "delete", "path": PROBE_ASSET_PATH})
+                            await art.call("manage_asset", {"action": "delete", "path": asset_path})
                         except Exception as error:
                             failures.append(f"probe asset cleanup failed: {type(error).__name__}")
-                if scene_file.exists() or asset_file.exists():
+                if scene_file.exists() or asset_file.exists() or asset_meta_file.exists():
                     failures.append("probe files remain in the Unity project")
-                if failures:
-                    log.error("Unity MCP smoke-test cleanup incomplete: %s", "; ".join(failures))
-                    raise MCPError("MCP smoke-test cleanup incomplete: " + "; ".join(failures))
+            self._smoke_asset_path = None
+            self._smoke_object_ids = set()
+            if failures:
+                log.error("Unity MCP smoke-test cleanup incomplete: %s", "; ".join(failures))
+                raise MCPError("MCP smoke-test cleanup incomplete: " + "; ".join(failures))
 
-    async def close(self):
+    async def close(self, force=False):
+        if self._persistent and not force:
+            return
+        self._active_instance_id = None
         process, self.process = self.process, None
         stderr_task, self._stderr_task = self._stderr_task, None
         if stderr_task:
@@ -497,6 +618,15 @@ class UnityMCPClient:
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
+
+
+async def shutdown_environment_clients():
+    """Stop shared MCP server processes when the bot or CLI exits."""
+    clients = list(_ENVIRONMENT_CLIENTS)
+    _ENVIRONMENT_CLIENTS.clear()
+    for client in clients:
+        client._persistent = False
+        await client.close(force=True)
 
 
 async def connected_client(expected_project=None):

@@ -12,6 +12,7 @@ using UnityEngine.TestTools;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.LowLevel;
 using UnityEngine.UI;
+using UnityEngine.EventSystems;
 using Studio.Runtime;
 
 public class PromptRuntimeTests {
@@ -29,14 +30,26 @@ public class PromptRuntimeTests {
     }
     static Component Target(string id,string type) {
         var go=Find(id); Assert.NotNull(go,"Missing object "+id);
-        var component=go.GetComponents<Component>().FirstOrDefault(c=>c!=null && c.GetType().FullName==type);
+        var component=go.GetComponents<Component>().FirstOrDefault(c=>c!=null &&
+            (c.GetType().FullName==type || c.GetType().Name==type));
         Assert.NotNull(component,"Missing component "+id+":"+type); return component;
+    }
+    static Key ParseKey(string member) {
+        try { return (Key)Enum.Parse(typeof(Key),member,true); }
+        catch (ArgumentException) {
+            if (member.EndsWith("Key",StringComparison.OrdinalIgnoreCase))
+                return (Key)Enum.Parse(typeof(Key),member.Substring(0,member.Length-3),true);
+            throw;
+        }
     }
     static object Read(Component component,string member) {
         var field=component.GetType().GetField(member,BindingFlags.Public|BindingFlags.Instance);
         if(field!=null) return field.GetValue(component);
         var property=component.GetType().GetProperty(member,BindingFlags.Public|BindingFlags.Instance);
-        Assert.NotNull(property,"Missing public member "+member); return property.GetValue(component);
+        if(property!=null) return property.GetValue(component);
+        var getter=component.GetType().GetMethod(member,BindingFlags.Public|BindingFlags.Instance,null,Type.EmptyTypes,null);
+        Assert.NotNull(getter,"Missing public field, property or zero-argument state getter "+member);
+        return getter.Invoke(component,null);
     }
     static void Set(Component component,string member,string text) {
         var field=component.GetType().GetField(member,BindingFlags.Public|BindingFlags.Instance);
@@ -57,7 +70,7 @@ public class PromptRuntimeTests {
             .ToDictionary(i=>i.id,i=>i.transform.position);
         foreach(var step in probe.steps) {
             if(step.action=="key") {
-                var key=(Key)Enum.Parse(typeof(Key),step.member,true);
+                var key=ParseKey(step.member);
                 if(bool.Parse(step.value)) held.Add(key); else held.Remove(key);
                 InputSystem.QueueStateEvent(keyboard,new KeyboardState(held.ToArray()));
             } else if(step.action=="set") Set(Target(step.object_id,step.component),step.member,step.value);
@@ -68,6 +81,12 @@ public class PromptRuntimeTests {
             } else if(step.action=="click") {
                 var go=Find(step.object_id); Assert.NotNull(go); var button=go.GetComponent<Button>();
                 Assert.NotNull(button); Assert.IsTrue(button.interactable); button.onClick.Invoke();
+            } else if(step.action=="pointer") {
+                var go=Find(step.object_id); Assert.NotNull(go);
+                var pointer=new PointerEventData(EventSystem.current) { pointerId=-1 };
+                if(step.value=="down") Assert.IsTrue(ExecuteEvents.Execute<IPointerDownHandler>(go,pointer,ExecuteEvents.pointerDownHandler));
+                else if(step.value=="up") ExecuteEvents.Execute<IPointerUpHandler>(go,pointer,ExecuteEvents.pointerUpHandler);
+                else Assert.Fail("Pointer steps require value down or up");
             } else Assert.AreEqual("wait",step.action);
             for(int i=0;i<step.frames;i++) yield return null;
         }
@@ -108,13 +127,19 @@ public class PromptRuntimeTests {
             Directory.CreateDirectory("Artifacts");
             File.WriteAllText(Path.GetFullPath("Artifacts/runtime_checks.json"),JsonUtility.ToJson(new Evidence { checks=records.ToArray() },true));
         }
-        var camera=Camera.main;
-        if(camera!=null) {
-            var target=new RenderTexture(960,540,24); camera.targetTexture=target; camera.Render(); RenderTexture.active=target;
-            var texture=new Texture2D(960,540,TextureFormat.RGB24,false); texture.ReadPixels(new Rect(0,0,960,540),0,0); texture.Apply();
-            File.WriteAllBytes(Path.GetFullPath("Artifacts/preview.png"),texture.EncodeToPNG());
-            camera.targetTexture=null; RenderTexture.active=null; UnityEngine.Object.Destroy(target); UnityEngine.Object.Destroy(texture);
-        }
+        yield return new WaitForEndOfFrame();
+        var screenshot=ScreenCapture.CaptureScreenshotAsTexture();
+        Assert.NotNull(screenshot,"Game view screenshot was not captured");
+        var pixels=screenshot.GetPixels();
+        var buttonColor=new Color(49f/255f,91f/255f,145f/255f);
+        int visibleButtonPixels=pixels.Count(p=>Mathf.Abs(p.r-buttonColor.r)<.12f &&
+            Mathf.Abs(p.g-buttonColor.g)<.12f && Mathf.Abs(p.b-buttonColor.b)<.12f);
+        int visibleTextPixels=pixels.Count(p=>p.r>.88f && p.g>.88f && p.b>.88f);
+        Assert.Greater(visibleButtonPixels,100,"Game view is missing visible touch button surfaces");
+        Assert.Greater(visibleTextPixels,20,"Game view is missing readable UI text");
+        Directory.CreateDirectory("Artifacts");
+        File.WriteAllBytes(Path.GetFullPath("Artifacts/preview.png"),screenshot.EncodeToPNG());
+        UnityEngine.Object.Destroy(screenshot);
         Assert.IsTrue(records.All(r=>r.passed),string.Join("\n",records.Where(r=>!r.passed).Select(r=>r.id+": "+r.error)));
     }
     [UnityTearDown] public IEnumerator Cleanup() {

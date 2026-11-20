@@ -1,0 +1,1239 @@
+{
+  "version": 2,
+  "title": "Coin Collector",
+  "dimension": "2D",
+  "orientation": "landscape",
+  "scenes": [
+    {
+      "name": "MainGame",
+      "kind": "gameplay",
+      "background_color": "#14263D",
+      "requirement_ids": [
+        "R001",
+        "R002",
+        "R003",
+        "R004",
+        "R005",
+        "R006",
+        "R007",
+        "R009"
+      ],
+      "objects": [
+        {
+          "id": "camera",
+          "name": "Main Camera",
+          "role": "camera",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            -10.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "MainCamera",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.Camera",
+              "properties": [
+                {
+                  "name": "orthographic",
+                  "kind": "bool",
+                  "value": "true"
+                },
+                {
+                  "name": "orthographicSize",
+                  "kind": "float",
+                  "value": "6"
+                },
+                {
+                  "name": "clearFlags",
+                  "kind": "enum",
+                  "value": "SolidColor"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": []
+        },
+        {
+          "id": "player",
+          "name": "Player",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Player",
+          "layer": 0,
+          "sprite": "",
+          "color": "#3478F6",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Rigidbody2D",
+              "properties": [
+                {
+                  "name": "gravityScale",
+                  "kind": "float",
+                  "value": "5"
+                },
+                {
+                  "name": "freezeRotation",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "BoxCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "false"
+                }
+              ]
+            },
+            {
+              "type": "PlayerController",
+              "properties": [
+                {
+                  "name": "moveSpeed",
+                  "kind": "float",
+                  "value": "5"
+                },
+                {
+                  "name": "jumpForce",
+                  "kind": "float",
+                  "value": "10"
+                },
+                {
+                  "name": "useKeyboard",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Cube",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R002"
+          ]
+        },
+        {
+          "id": "ground",
+          "name": "Ground",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            -3.0,
+            0.0
+          ],
+          "scale": [
+            20.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Ground",
+          "layer": 0,
+          "sprite": "",
+          "color": "#2EAD67",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "BoxCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "false"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Cube",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R002"
+          ]
+        },
+        {
+          "id": "coin1",
+          "name": "Coin1",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            -8.0,
+            2.0,
+            0.0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            1.0
+          ],
+          "tag": "Coin",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFD43B",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "CircleCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "Coin",
+              "properties": [
+                {
+                  "name": "collector",
+                  "kind": "reference",
+                  "value": "collector"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Sphere",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R003"
+          ]
+        },
+        {
+          "id": "coin2",
+          "name": "Coin2",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            -4.0,
+            3.0,
+            0.0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            1.0
+          ],
+          "tag": "Coin",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFD43B",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "CircleCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "Coin",
+              "properties": [
+                {
+                  "name": "collector",
+                  "kind": "reference",
+                  "value": "collector"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Sphere",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R003"
+          ]
+        },
+        {
+          "id": "coin3",
+          "name": "Coin3",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            4.0,
+            0.0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            1.0
+          ],
+          "tag": "Coin",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFD43B",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "CircleCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "Coin",
+              "properties": [
+                {
+                  "name": "collector",
+                  "kind": "reference",
+                  "value": "collector"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Sphere",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R003"
+          ]
+        },
+        {
+          "id": "coin4",
+          "name": "Coin4",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            4.0,
+            3.0,
+            0.0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            1.0
+          ],
+          "tag": "Coin",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFD43B",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "CircleCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "Coin",
+              "properties": [
+                {
+                  "name": "collector",
+                  "kind": "reference",
+                  "value": "collector"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Sphere",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R003"
+          ]
+        },
+        {
+          "id": "coin5",
+          "name": "Coin5",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            8.0,
+            2.0,
+            0.0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            1.0
+          ],
+          "tag": "Coin",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFD43B",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "CircleCollider2D",
+              "properties": [
+                {
+                  "name": "isTrigger",
+                  "kind": "bool",
+                  "value": "true"
+                }
+              ]
+            },
+            {
+              "type": "Coin",
+              "properties": [
+                {
+                  "name": "collector",
+                  "kind": "reference",
+                  "value": "collector"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "Sphere",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R003"
+          ]
+        },
+        {
+          "id": "collector",
+          "name": "CoinCollector",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "CoinCollector",
+              "properties": [
+                {
+                  "name": "totalCoins",
+                  "kind": "int",
+                  "value": "5"
+                },
+                {
+                  "name": "scoreText",
+                  "kind": "reference",
+                  "value": "scoreText:Text"
+                },
+                {
+                  "name": "winText",
+                  "kind": "reference",
+                  "value": "winText:Text"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R004",
+            "R005"
+          ]
+        },
+        {
+          "id": "canvas",
+          "name": "Canvas",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Canvas",
+              "properties": [
+                {
+                  "name": "renderMode",
+                  "kind": "enum",
+                  "value": "ScreenSpaceOverlay"
+                }
+              ]
+            },
+            {
+              "type": "CanvasScaler",
+              "properties": [
+                {
+                  "name": "uiScaleMode",
+                  "kind": "enum",
+                  "value": "ScaleWithScreenSize"
+                }
+              ]
+            },
+            {
+              "type": "GraphicRaycaster",
+              "properties": []
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R006"
+          ]
+        },
+        {
+          "id": "scoreText",
+          "name": "ScoreText",
+          "role": "decoration",
+          "parent": "canvas",
+          "position": [
+            -350.0,
+            220.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Text",
+              "properties": [
+                {
+                  "name": "text",
+                  "kind": "string",
+                  "value": "Score: 0"
+                },
+                {
+                  "name": "fontSize",
+                  "kind": "int",
+                  "value": "24"
+                },
+                {
+                  "name": "alignment",
+                  "kind": "enum",
+                  "value": "UpperLeft"
+                },
+                {
+                  "name": "color",
+                  "kind": "color",
+                  "value": "#FFFFFF"
+                }
+              ]
+            },
+            {
+              "type": "UnityEngine.RectTransform",
+              "properties": [
+                {
+                  "name": "sizeDelta",
+                  "kind": "vector2",
+                  "value": "[300,60]"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R006"
+          ]
+        },
+        {
+          "id": "winText",
+          "name": "WinText",
+          "role": "decoration",
+          "parent": "canvas",
+          "position": [
+            0.0,
+            90.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Text",
+              "properties": [
+                {
+                  "name": "text",
+                  "kind": "string",
+                  "value": "YOU WIN!"
+                },
+                {
+                  "name": "fontSize",
+                  "kind": "int",
+                  "value": "48"
+                },
+                {
+                  "name": "alignment",
+                  "kind": "enum",
+                  "value": "Center"
+                },
+                {
+                  "name": "color",
+                  "kind": "color",
+                  "value": "#FFFFFF"
+                }
+              ]
+            },
+            {
+              "type": "UnityEngine.RectTransform",
+              "properties": [
+                {
+                  "name": "sizeDelta",
+                  "kind": "vector2",
+                  "value": "[500,120]"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R006"
+          ]
+        },
+        {
+          "id": "leftButton",
+          "name": "LeftButton",
+          "role": "decoration",
+          "parent": "canvas",
+          "position": [
+            -350.0,
+            -210.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Image",
+              "properties": [
+                {
+                  "name": "color",
+                  "kind": "color",
+                  "value": "#315B91"
+                }
+              ]
+            },
+            {
+              "type": "Button",
+              "properties": []
+            },
+            {
+              "type": "Studio.Runtime.TouchPad",
+              "properties": [
+                {
+                  "name": "action",
+                  "kind": "string",
+                  "value": "left"
+                }
+              ]
+            },
+            {
+              "type": "UnityEngine.RectTransform",
+              "properties": [
+                {
+                  "name": "sizeDelta",
+                  "kind": "vector2",
+                  "value": "[100,80]"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R009"
+          ]
+        },
+        {
+          "id": "rightButton",
+          "name": "RightButton",
+          "role": "decoration",
+          "parent": "canvas",
+          "position": [
+            -230.0,
+            -210.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Image",
+              "properties": [
+                {
+                  "name": "color",
+                  "kind": "color",
+                  "value": "#315B91"
+                }
+              ]
+            },
+            {
+              "type": "Button",
+              "properties": []
+            },
+            {
+              "type": "Studio.Runtime.TouchPad",
+              "properties": [
+                {
+                  "name": "action",
+                  "kind": "string",
+                  "value": "right"
+                }
+              ]
+            },
+            {
+              "type": "UnityEngine.RectTransform",
+              "properties": [
+                {
+                  "name": "sizeDelta",
+                  "kind": "vector2",
+                  "value": "[100,80]"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R009"
+          ]
+        },
+        {
+          "id": "jumpButton",
+          "name": "JumpButton",
+          "role": "decoration",
+          "parent": "canvas",
+          "position": [
+            350.0,
+            -210.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "Image",
+              "properties": [
+                {
+                  "name": "color",
+                  "kind": "color",
+                  "value": "#287653"
+                }
+              ]
+            },
+            {
+              "type": "Button",
+              "properties": []
+            },
+            {
+              "type": "Studio.Runtime.TouchPad",
+              "properties": [
+                {
+                  "name": "action",
+                  "kind": "string",
+                  "value": "jump"
+                }
+              ]
+            },
+            {
+              "type": "UnityEngine.RectTransform",
+              "properties": [
+                {
+                  "name": "sizeDelta",
+                  "kind": "vector2",
+                  "value": "[100,80]"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R009"
+          ]
+        },
+        {
+          "id": "studioEventSystem",
+          "name": "Studio EventSystem",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.EventSystems.EventSystem",
+              "properties": []
+            },
+            {
+              "type": "UnityEngine.InputSystem.UI.InputSystemUIInputModule",
+              "properties": []
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": []
+        },
+        {
+          "id": "leftButtonLabel",
+          "name": "LEFT",
+          "role": "ui",
+          "parent": "leftButton",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.RectTransform",
+              "properties": [
+                {
+                  "name": "sizeDelta",
+                  "kind": "vector2",
+                  "value": "[100,80]"
+                }
+              ]
+            },
+            {
+              "type": "UnityEngine.UI.Text",
+              "properties": [
+                {
+                  "name": "text",
+                  "kind": "string",
+                  "value": "LEFT"
+                },
+                {
+                  "name": "fontSize",
+                  "kind": "int",
+                  "value": "18"
+                },
+                {
+                  "name": "alignment",
+                  "kind": "enum",
+                  "value": "Center"
+                },
+                {
+                  "name": "color",
+                  "kind": "color",
+                  "value": "#FFFFFF"
+                },
+                {
+                  "name": "raycastTarget",
+                  "kind": "bool",
+                  "value": "false"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": []
+        },
+        {
+          "id": "rightButtonLabel",
+          "name": "RIGHT",
+          "role": "ui",
+          "parent": "rightButton",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.RectTransform",
+              "properties": [
+                {
+                  "name": "sizeDelta",
+                  "kind": "vector2",
+                  "value": "[100,80]"
+                }
+              ]
+            },
+            {
+              "type": "UnityEngine.UI.Text",
+              "properties": [
+                {
+                  "name": "text",
+                  "kind": "string",
+                  "value": "RIGHT"
+                },
+                {
+                  "name": "fontSize",
+                  "kind": "int",
+                  "value": "18"
+                },
+                {
+                  "name": "alignment",
+                  "kind": "enum",
+                  "value": "Center"
+                },
+                {
+                  "name": "color",
+                  "kind": "color",
+                  "value": "#FFFFFF"
+                },
+                {
+                  "name": "raycastTarget",
+                  "kind": "bool",
+                  "value": "false"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": []
+        },
+        {
+          "id": "jumpButtonLabel",
+          "name": "JUMP",
+          "role": "ui",
+          "parent": "jumpButton",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.RectTransform",
+              "properties": [
+                {
+                  "name": "sizeDelta",
+                  "kind": "vector2",
+                  "value": "[100,80]"
+                }
+              ]
+            },
+            {
+              "type": "UnityEngine.UI.Text",
+              "properties": [
+                {
+                  "name": "text",
+                  "kind": "string",
+                  "value": "JUMP"
+                },
+                {
+                  "name": "fontSize",
+                  "kind": "int",
+                  "value": "18"
+                },
+                {
+                  "name": "alignment",
+                  "kind": "enum",
+                  "value": "Center"
+                },
+                {
+                  "name": "color",
+                  "kind": "color",
+                  "value": "#FFFFFF"
+                },
+                {
+                  "name": "raycastTarget",
+                  "kind": "bool",
+                  "value": "false"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": []
+        }
+      ]
+    }
+  ],
+  "materials": []
+}

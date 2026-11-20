@@ -1,0 +1,308 @@
+{
+  "version": 2,
+  "name": "Coin Collector",
+  "genre": "2D Arcade Collector",
+  "dimension": "2D",
+  "camera_perspective": "Fixed orthographic side view, camera looking at the 2D scene from the front (XY plane), showing the full play area.",
+  "target_platform": "Mobile (Android/iOS) with PC testing support",
+  "orientation": "landscape",
+  "art_style": "Minimal flat solid-color shapes using Unity built-in Sprites (Square, Circle) and a simple text UI. Background uses a generated mountain image.",
+  "palette": [
+    "blue",
+    "green",
+    "yellow",
+    "white",
+    "black",
+    "mountain colors"
+  ],
+  "mechanics": [
+    "Player moves left and right",
+    "Player jumps",
+    "Coin collection increases score",
+    "Coin removal on collection",
+    "Win condition when all coins collected"
+  ],
+  "controls": [
+    "Keyboard: Left/Right arrows or A/D to move, Space to jump",
+    "Mobile: On-screen touch buttons for left, right, and jump"
+  ],
+  "level_structure": "Single flat green ground plane at the bottom. Player blue square starts on the ground. Five yellow coins are placed above the ground at different horizontal positions. No enemies, no obstacles. One scene, one level.",
+  "ui_requirements": [
+    "Score text displaying current score",
+    "Win text 'YOU WIN!' displayed when all coins collected",
+    "Mobile touch buttons (left, right, jump) visible only on mobile"
+  ],
+  "scenes": [
+    "Main"
+  ],
+  "required_assets": [
+    {
+      "id": "mountain_bg",
+      "kind": "texture",
+      "prompt": "Simple flat vector-style mountain landscape background for a 2D game, solid colors, no text, no characters, no UI, wide aspect ratio, mountains and sky, minimal style",
+      "workflow": "image",
+      "library_path": "",
+      "license": "",
+      "width": 2048,
+      "height": 1024,
+      "transparent": false,
+      "pixels_per_unit": 128,
+      "requirement_ids": [
+        "R9"
+      ]
+    }
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "original_instruction": "create Create a very simple 2D mobile game called Coin Collector.",
+      "implementation": "Set up a Unity 2D project with a single scene named Main. Configure the project for mobile and PC. The game title is Coin Collector.",
+      "owner": "designer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R2",
+      "original_instruction": "The player is a blue square that moves left and right and jumps on a flat green ground.",
+      "implementation": "Create a player GameObject as a blue square Sprite (Unity built-in Square) with a Rigidbody2D and BoxCollider2D. Implement horizontal movement via velocity and jumping via vertical impulse when grounded. Create a flat green ground GameObject using a green Sprite (built-in Square) with BoxCollider2D.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R3",
+      "original_instruction": "Place 5 yellow coins above the ground.",
+      "implementation": "Create 5 coin GameObjects using yellow Circle Sprites (built-in Circle) with CircleCollider2D, positioned above the ground at different horizontal locations and heights.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R4",
+      "original_instruction": "Collecting a coin increases the score by 1 and removes the coin.",
+      "implementation": "Implement OnTriggerEnter2D on the player to detect coin collisions. On collision, increment score by 1, update the score UI text, and destroy the coin GameObject.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R5",
+      "original_instruction": "When all 5 coins are collected, display \"YOU WIN!\".",
+      "implementation": "Track the number of collected coins. When the count reaches 5, set a UI Text element to display 'YOU WIN!'.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R6",
+      "original_instruction": "Use only Unity built-in shapes, solid colors, and a simple text UI.",
+      "implementation": "Use Unity's built-in Sprite shapes (Square, Circle) for all game objects. Apply solid color materials/sprites. Use Unity UI Text for score and win message. No external models or textures except the background image.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R7",
+      "original_instruction": "One scene, one level, no enemies, no textures, no external assets, no animations, and no sound.",
+      "implementation": "Ensure the project contains exactly one scene and one level. Do not add enemies, animations, sound, or external assets. The only texture is the background mountain image, which is allowed by the user's later instruction.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R8",
+      "original_instruction": "Keep everything minimal, functional, and easy to test.",
+      "implementation": "Keep code and scene structure simple. Use clear naming and minimal components. Ensure the game can be tested quickly on PC and mobile.",
+      "owner": "developer",
+      "verification_method": "manual"
+    },
+    {
+      "id": "R9",
+      "original_instruction": "Use keyboard controls for PC testing and simple touch buttons for mobile.",
+      "implementation": "Implement input handling that detects keyboard (arrow keys/A/D for movement, Space for jump) and also provides on-screen touch buttons (left, right, jump) for mobile. Touch buttons should be visible only on mobile platforms.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R10",
+      "original_instruction": "you can generate or add an image on theel environement background to be like montagne image",
+      "implementation": "Generate a mountain background image using the provided asset workflow and set it as the background of the scene (e.g., a SpriteRenderer behind all other objects).",
+      "owner": "art",
+      "verification_method": "manual"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T1",
+      "description": "Set up Unity 2D project with one scene named Main, configure for mobile and PC.",
+      "owner": "developer",
+      "dependencies": [],
+      "requirement_ids": [
+        "R1"
+      ]
+    },
+    {
+      "id": "T2",
+      "description": "Create player blue square with Rigidbody2D, BoxCollider2D, and movement/jump script.",
+      "owner": "developer",
+      "dependencies": [
+        "T1"
+      ],
+      "requirement_ids": [
+        "R2"
+      ]
+    },
+    {
+      "id": "T3",
+      "description": "Create flat green ground with BoxCollider2D.",
+      "owner": "developer",
+      "dependencies": [
+        "T1"
+      ],
+      "requirement_ids": [
+        "R2"
+      ]
+    },
+    {
+      "id": "T4",
+      "description": "Create 5 yellow coin GameObjects with CircleCollider2D and place them above ground.",
+      "owner": "developer",
+      "dependencies": [
+        "T1"
+      ],
+      "requirement_ids": [
+        "R3"
+      ]
+    },
+    {
+      "id": "T5",
+      "description": "Implement coin collection logic: trigger detection, score increment, coin removal.",
+      "owner": "developer",
+      "dependencies": [
+        "T2",
+        "T4"
+      ],
+      "requirement_ids": [
+        "R4"
+      ]
+    },
+    {
+      "id": "T6",
+      "description": "Implement win condition: when score reaches 5, display 'YOU WIN!' text.",
+      "owner": "developer",
+      "dependencies": [
+        "T5"
+      ],
+      "requirement_ids": [
+        "R5"
+      ]
+    },
+    {
+      "id": "T7",
+      "description": "Ensure all game objects use Unity built-in shapes and solid colors; add UI Text for score and win message.",
+      "owner": "developer",
+      "dependencies": [
+        "T1",
+        "T5",
+        "T6"
+      ],
+      "requirement_ids": [
+        "R6"
+      ]
+    },
+    {
+      "id": "T8",
+      "description": "Verify scene count, no enemies, no animations, no sound, no external assets except background.",
+      "owner": "qa",
+      "dependencies": [
+        "T1",
+        "T7"
+      ],
+      "requirement_ids": [
+        "R7"
+      ]
+    },
+    {
+      "id": "T9",
+      "description": "Review code and scene for simplicity and testability.",
+      "owner": "qa",
+      "dependencies": [
+        "T7"
+      ],
+      "requirement_ids": [
+        "R8"
+      ]
+    },
+    {
+      "id": "T10",
+      "description": "Implement keyboard input for PC and touch buttons for mobile.",
+      "owner": "developer",
+      "dependencies": [
+        "T2"
+      ],
+      "requirement_ids": [
+        "R9"
+      ]
+    },
+    {
+      "id": "T11",
+      "description": "Generate mountain background image using image generation workflow.",
+      "owner": "art",
+      "dependencies": [],
+      "requirement_ids": [
+        "R10"
+      ]
+    },
+    {
+      "id": "T12",
+      "description": "Add mountain background image to scene as background sprite.",
+      "owner": "developer",
+      "dependencies": [
+        "T11"
+      ],
+      "requirement_ids": [
+        "R10"
+      ]
+    },
+    {
+      "id": "T13",
+      "description": "Test gameplay on PC: movement, jumping, coin collection, win condition.",
+      "owner": "qa",
+      "dependencies": [
+        "T5",
+        "T6",
+        "T10"
+      ],
+      "requirement_ids": [
+        "R2",
+        "R4",
+        "R5",
+        "R9"
+      ]
+    },
+    {
+      "id": "T14",
+      "description": "Test on mobile device or simulator: touch buttons work, layout fits.",
+      "owner": "qa",
+      "dependencies": [
+        "T10"
+      ],
+      "requirement_ids": [
+        "R9"
+      ]
+    }
+  ],
+  "assumptions": [
+    "The game uses a fixed orthographic camera with a visible area of about 16x9 world units.",
+    "The player square size is 1x1 unit, ground is 16 units wide and 1 unit thick.",
+    "Coins are placed at heights reachable by a single jump.",
+    "The score UI is displayed at the top-left corner.",
+    "The win text is displayed in the center of the screen.",
+    "Touch buttons are placed at the bottom corners of the screen.",
+    "The mountain background image is used as a full-screen background behind the ground.",
+    "The game is landscape orientation.",
+    "The player can jump only when on the ground.",
+    "No physics friction or gravity modifications beyond defaults."
+  ],
+  "clarification_questions": [],
+  "limitations": [
+    "No animations or sound are included as requested.",
+    "The background image is the only texture; all other visuals are solid-color built-in shapes.",
+    "The game is minimal and does not include menus, restart, or additional levels.",
+    "The mountain image is generated via image workflow; no 3D models are used.",
+    "The game is tested on PC and mobile, but no specific device testing is guaranteed."
+  ]
+}

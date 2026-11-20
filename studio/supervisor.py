@@ -12,7 +12,8 @@ from studio.request_validation import NOISE
 from studio.schemas import GameSpec, UIPlan
 from studio.flexible import load_game_spec, requirement_report
 from studio.state import Job, JobCancelled, ProcessLock, write_json
-from studio.unity import RUNTIME_CONTRACT, UnityFailure, UnityRunner, bootstrap, save_scripts, validate_files
+from studio.unity import (RUNTIME_CONTRACT, UnityFailure, UnityRunner, bootstrap,
+    ensure_live_editor, project_is_open, save_scripts, uses_live_editor, validate_files)
 
 TASKS = [
     ("designer", "game_spec", []), ("developer", "scripts", ["game_spec"]),
@@ -222,6 +223,7 @@ class Supervisor:
                     await self.registry.refresh()
                     service=ModelService(self.registry,job)
                     spec=load_game_spec((job.directory/"game_spec.json").read_text(encoding="utf-8"))
+                    job.data["resume_implementation"] = (job.directory / "implementation.json").is_file()
                     if spec.version == 2:
                         base_request=job.data.get("effective_request",job.data["request"])
                         for attempt in range(3):
@@ -230,6 +232,7 @@ class Supervisor:
                                      if item.get("status")=="pending_approval"]
                             effective_request=base_request
                             if pending:
+                                job.data["resume_implementation"] = False
                                 effective_request += "\n\nAdditional user instructions (preserve the original request too):\n" + "\n".join("- "+item["text"] for item in pending)
                                 spec=await self.agents["designer"].plan(service,effective_request)
                                 if int(job.data.get("instruction_revision",0))==revision:
@@ -250,7 +253,23 @@ class Supervisor:
                         for item in job.data.get("additional_instructions",[]):
                             if item.get("status")=="pending_approval": item["status"]="queued"
                     job.data["status"]="building"; job.save()
+                    import os
+                    mode = os.environ.get("STUDIO_UNITY_MODE", "auto").lower()
+                    project_path = job.directory / "UnityProject"
+                    opened_before = project_is_open(project_path)
+                    if mode not in ("auto", "live", "batch"):
+                        raise UnityFailure("project_setup", "STUDIO_UNITY_MODE must be auto, batch or live", "infrastructure")
+                    if mode == "batch" and opened_before:
+                        raise UnityFailure("project_setup", "Batch mode cannot run against an open Unity project", "infrastructure")
+                    use_live_editor = uses_live_editor(mode, opened_before)
                     project=await asyncio.to_thread(bootstrap,job)
+                    if use_live_editor:
+                        if not project_is_open(project):
+                            await self.notify(notify, "Opening this approved game project in the Unity Editor and connecting its MCP bridge.")
+                        else:
+                            await self.notify(notify, "Connecting to the Unity Editor already open on this approved project.")
+                        await ensure_live_editor(job, project)
+                        await self.notify(notify, "Unity is connected. The approved game will now be built and verified in this open Editor.")
                     await service.unity_context("supervisor")
                     if spec.version == 2:
                         from studio.generation import build_flexible

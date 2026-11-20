@@ -1,0 +1,210 @@
+{
+  "probes": [
+    {
+      "id": "probe_player_movement",
+      "requirement_ids": [
+        "R002",
+        "R009"
+      ],
+      "scene": "MainGame",
+      "steps": [
+        {
+          "action": "key",
+          "object_id": "",
+          "component": "",
+          "member": "D",
+          "value": "true",
+          "frames": 1
+        },
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 10
+        },
+        {
+          "action": "key",
+          "object_id": "",
+          "component": "",
+          "member": "dKey",
+          "value": "false",
+          "frames": 1
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "position_changed",
+          "object_id": "player",
+          "component": "",
+          "member": "",
+          "comparison": "equals",
+          "value": "0.1"
+        }
+      ]
+    },
+    {
+      "id": "probe_coin_collection",
+      "requirement_ids": [
+        "R004",
+        "R005"
+      ],
+      "scene": "MainGame",
+      "steps": [
+        {
+          "action": "invoke",
+          "object_id": "coin1",
+          "component": "Coin",
+          "member": "CollectCoin",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 5
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "property",
+          "object_id": "collector",
+          "component": "CoinCollector",
+          "member": "GetCollectedCoins",
+          "comparison": "equals",
+          "value": "1"
+        }
+      ]
+    },
+    {
+      "id": "probe_win_condition",
+      "requirement_ids": [
+        "R005"
+      ],
+      "scene": "MainGame",
+      "steps": [
+        {
+          "action": "invoke",
+          "object_id": "coin1",
+          "component": "Coin",
+          "member": "CollectCoin",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "invoke",
+          "object_id": "coin2",
+          "component": "Coin",
+          "member": "CollectCoin",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "invoke",
+          "object_id": "coin3",
+          "component": "Coin",
+          "member": "CollectCoin",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "invoke",
+          "object_id": "coin4",
+          "component": "Coin",
+          "member": "CollectCoin",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "invoke",
+          "object_id": "coin5",
+          "component": "Coin",
+          "member": "CollectCoin",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 10
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "property",
+          "object_id": "collector",
+          "component": "CoinCollector",
+          "member": "IsGameWon",
+          "comparison": "equals",
+          "value": "True"
+        },
+        {
+          "kind": "active",
+          "object_id": "winText",
+          "component": "",
+          "member": "",
+          "comparison": "equals",
+          "value": "True"
+        },
+        {
+          "kind": "property",
+          "object_id": "winText",
+          "component": "Text",
+          "member": "text",
+          "comparison": "equals",
+          "value": "YOU WIN!"
+        }
+      ]
+    },
+    {
+      "id": "probe_touch_movement",
+      "requirement_ids": [
+        "R009"
+      ],
+      "scene": "MainGame",
+      "steps": [
+        {
+          "action": "pointer",
+          "object_id": "rightButton",
+          "component": "",
+          "member": "",
+          "value": "down",
+          "frames": 1
+        },
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 60
+        },
+        {
+          "action": "pointer",
+          "object_id": "rightButton",
+          "component": "",
+          "member": "",
+          "value": "up",
+          "frames": 1
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "position_changed",
+          "object_id": "player",
+          "component": "",
+          "member": "",
+          "comparison": "equals",
+          "value": "0.1"
+        }
+      ]
+    }
+  ]
+}

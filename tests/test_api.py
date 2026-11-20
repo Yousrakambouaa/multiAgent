@@ -72,6 +72,21 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("test-secret", str(failure.exception))
         self.assertEqual(len(self.requests), 1)
 
+    async def test_401_explains_key_problem_without_trying_other_models(self):
+        with self.assertRaisesRegex(RuntimeError,"authentication failed.*401.*Changing models") as error:
+            await self.run_replies([httpx.Response(401,json={"error":{"message":"User not found. test-secret"}})])
+        self.assertNotIn("test-secret",str(error.exception))
+        self.assertEqual(len(self.requests),1)
+
+    async def test_credit_rejection_falls_back_only_to_available_free_model(self):
+        registry=self.service.registry
+        registry.models["free:free"]=registry.models["one"]
+        registry.roles["designer"].append("free:free")
+        result=await self.run_replies([httpx.Response(402,json={"error":{"message":"Insufficient credits"}}),
+                                      httpx.Response(200,json=completion())])
+        self.assertEqual(result,{"ok":True})
+        self.assertEqual([r["model"] for r in self.requests],["one","free:free"])
+
     async def test_budget_prevents_retry_network_call(self):
         self.job.data["cap_usd"] = .0001
         self.job.save()

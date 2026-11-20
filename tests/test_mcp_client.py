@@ -33,6 +33,9 @@ class FakeMCPProcess:
         self.returncode = None
         self.current_path = "Assets/Scenes/Main.unity"
         self.probe_exists = False
+        self.asset_exists = False
+        self.created_asset_paths = []
+        self.deleted_asset_paths = []
         self.calls = []
 
     def write(self, data):
@@ -44,10 +47,15 @@ class FakeMCPProcess:
         if method == "initialize":
             result = {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "fake-unity-mcp", "version": "test"}}
         elif method == "tools/list":
-            names = ["manage_scene", "manage_gameobject", "manage_components", "manage_asset", "find_gameobjects", "read_console", "validate_script", "run_tests", "get_test_job", "execute_code"]
+            names = ["manage_scene", "manage_gameobject", "manage_components", "manage_asset", "manage_camera", "find_gameobjects", "read_console", "validate_script", "run_tests", "get_test_job", "execute_code", "refresh_unity", "execute_menu_item"]
             result = {"tools": [{"name": name, "inputSchema": {"type": "object", "properties": {}}} for name in names]}
         elif method == "resources/read":
-            result = {"contents": [{"mimeType": "application/json", "text": json.dumps({"data": {"projectRoot": self.root, "unityVersion": "6000.3.24f1"}})}]}
+            uri = params.get("uri", "")
+            if uri.startswith("mcpforunity://scene/gameobject/"):
+                value = {"data": {"name": "StudioMCPProbe", "componentTypes": ["Transform", "MeshRenderer", "MeshFilter", "Rigidbody"]}}
+            else:
+                value = {"data": {"projectRoot": self.root, "unityVersion": "6000.3.24f1"}}
+            result = {"contents": [{"mimeType": "application/json", "text": json.dumps(value)}]}
         elif method == "tools/call":
             name, args = params["name"], params["arguments"]
             self.calls.append({"name": name, "arguments": args})
@@ -68,10 +76,17 @@ class FakeMCPProcess:
             elif name == "manage_gameobject" and action == "delete":
                 self.probe_exists = False
                 data = {"deleted": True}
-            elif name == "find_gameobjects":
-                data = {"ids": [42] if self.probe_exists else []}
+            elif name == "manage_asset" and action == "create":
+                self.asset_exists = True
+                self.created_asset_paths.append(args["path"])
+                data = {"created": True}
             elif name == "manage_asset" and action == "delete":
+                self.asset_exists = False
+                self.deleted_asset_paths.append(args["path"])
                 data = {"deleted": True}
+            elif name == "find_gameobjects":
+                key = getattr(self, "find_ids_key", "ids")
+                data = {key: [42] if self.probe_exists else []}
             else:
                 data = {"ok": True}
             result = {"content": [{"type": "text", "text": json.dumps({"success": True, "data": data})}]}
@@ -95,6 +110,10 @@ class FakeMCPProcess:
 
 
 class UnityMCPClientTests(unittest.IsolatedAsyncioTestCase):
+    def test_empty_editor_registry_during_startup_is_retryable(self):
+        self.assertTrue(mcp.transient_editor_error(
+            mcp.MCPError("No Unity instances are currently connected. Start Unity and press 'Start Session'.")))
+
     async def asyncSetUp(self):
         self.temp = Path(__file__).resolve().parent / (".mcp-test-" + uuid4().hex)
         self.root = self.temp / "jobs" / "test-job" / "UnityProject"
@@ -124,6 +143,76 @@ class UnityMCPClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.for_agent("art", self.root).available, ["manage_asset"])
         await self.client.verify_project(self.root)
 
+    async def test_instance_assets_path_is_normalized_to_the_matching_project_root(self):
+        self.client.tools["set_active_instance"] = {"inputSchema": {"type": "object", "properties": {}}}
+        self.client.read_resource = AsyncMock(side_effect=[
+            {"instances": [{"id": "UnityProject@abc123", "path": str(self.root / "Assets")}]},
+            {"unity": {"instance_id": None}},
+            {"projectRoot": str(self.root), "unityVersion": "6000.3.24f1"},
+        ])
+        self.client._request = AsyncMock(return_value={"content": []})
+
+        info = await self.client.verify_project(self.root)
+
+        self.assertEqual(info["projectRoot"], str(self.root))
+        self.client._request.assert_awaited_once_with("tools/call", {
+            "name": "set_active_instance", "arguments": {"instance": "UnityProject@abc123"}
+        })
+
+    async def test_matching_instance_is_selected_once_per_mcp_connection(self):
+        self.client.tools["set_active_instance"] = {"inputSchema": {"type": "object", "properties": {}}}
+        self.client.read_resource = AsyncMock(side_effect=[
+            {"instances": [{"id": "UnityProject@abc123", "path": str(self.root / "Assets")}]},
+            {"unity": {"instance_id": "UnityProject@abc123"}},
+            {"projectRoot": str(self.root), "unityVersion": "6000.3.24f1"},
+            {"instances": [{"id": "UnityProject@abc123", "path": str(self.root / "Assets")}]},
+            {"unity": {"instance_id": "UnityProject@abc123"}},
+            {"projectRoot": str(self.root), "unityVersion": "6000.3.24f1"},
+        ])
+        self.client._request = AsyncMock(return_value={"content": []})
+
+        await self.client.verify_project(self.root)
+        await self.client.verify_project(self.root)
+
+        self.client._request.assert_awaited_once_with("tools/call", {
+            "name": "set_active_instance", "arguments": {"instance": "UnityProject@abc123"}
+        })
+
+    async def test_reselects_matching_instance_after_editor_context_changes(self):
+        self.client.tools["set_active_instance"] = {"inputSchema": {"type": "object", "properties": {}}}
+        self.client.read_resource = AsyncMock(side_effect=[
+            {"instances": [{"id": "UnityProject@abc123", "path": str(self.root / "Assets")}]},
+            {"unity": {"instance_id": "UnityProject@abc123"}},
+            {"projectRoot": str(self.root), "unityVersion": "6000.3.24f1"},
+            {"instances": [{"id": "UnityProject@abc123", "path": str(self.root / "Assets")}]},
+            {"unity": {"instance_id": "OtherProject@def456"}},
+            {"projectRoot": str(self.root), "unityVersion": "6000.3.24f1"},
+        ])
+        self.client._request = AsyncMock(return_value={"content": []})
+
+        await self.client.verify_project(self.root)
+        await self.client.verify_project(self.root)
+
+        self.assertEqual(self.client._request.await_count, 2)
+        self.assertTrue(all(call.args[0] == "tools/call" and
+                            call.args[1]["arguments"]["instance"] == "UnityProject@abc123"
+                            for call in self.client._request.await_args_list))
+
+    async def test_scene_smoke_accepts_unity_instance_ids_response_shape(self):
+        self.process.find_ids_key = "instanceIDs"
+        result = await self.client.smoke_test(self.root)
+        self.assertEqual(result["inspected_object_ids"], [42])
+
+    async def test_scene_smoke_uses_unique_material_path_and_deletes_same_path(self):
+        result = await self.client.smoke_test(self.root)
+        asset_path = result["asset_created"]
+        self.assertRegex(asset_path, r"^Assets/Studio/Generated/StudioMCPProbe-[0-9a-f]{32}\.mat$")
+        self.assertIn("Rigidbody", result["verified_component_types"])
+        self.assertEqual(self.process.created_asset_paths, [asset_path])
+        self.assertIn(asset_path, self.process.deleted_asset_paths)
+        self.assertIn(mcp.PROBE_SCENE_PATH, self.process.deleted_asset_paths)
+        self.assertFalse(self.process.asset_exists)
+
     async def test_untrusted_paths_and_arbitrary_code_tools_are_blocked(self):
         with self.assertRaises(mcp.MCPError):
             await self.client.call_for_agent("developer", "execute_code", {"code": "bad"}, self.root)
@@ -150,6 +239,35 @@ class UnityMCPClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(mcp.MCPError, "does not match"):
             await self.client.for_agent("developer", self.root).call("manage_scene", {"action": "create"})
         self.assertFalse(self.process.calls)
+
+    async def test_live_mode_rejects_wrong_project_without_batch_fallback(self):
+        from studio.state import Job
+        from studio.unity import UnityRunner, UnityFailure
+        job=Job.create("test",1,root=self.root.parents[1])
+        project=job.directory/"UnityProject"
+        project.mkdir()
+        with patch.dict(os.environ,{"STUDIO_UNITY_MODE":"live"}),patch.object(
+                mcp.UnityMCPClient,"from_environment",return_value=self.client),patch.object(self.client,"close",AsyncMock()),patch(
+                "studio.unity.ensure_live_editor",new=AsyncMock()):
+            with self.assertRaisesRegex(UnityFailure,"does not match"):
+                await UnityRunner(job,project).compile()
+        self.assertFalse(self.process.calls)
+
+    async def test_live_scene_assembler_menu_is_allowed_but_arbitrary_menus_are_not(self):
+        await self.client.for_agent("developer",self.root).call("execute_menu_item",{
+            "menu_path":"Studio/Assemble prompt-driven scenes"})
+        with self.assertRaises(mcp.MCPError):
+            await self.client.for_agent("developer",self.root).call("execute_menu_item",{"menu_path":"File/Exit"})
+        self.assertEqual(len(self.process.calls),1)
+
+    async def test_qa_camera_access_is_limited_to_screenshots(self):
+        await self.client.for_agent("qa",self.root).call("manage_camera",{
+            "action":"screenshot","capture_source":"scene_view","include_image":True
+        })
+        with self.assertRaises(mcp.MCPError):
+            await self.client.for_agent("qa",self.root).call("manage_camera",{
+                "action":"create_camera","camera_name":"Unauthorized"
+            })
 
     async def test_existing_agent_service_uses_role_tools(self):
         from studio.api import ModelService
@@ -189,7 +307,22 @@ class MCPConfigurationTests(unittest.TestCase):
             client = mcp.UnityMCPClient.from_environment()
             self.assertEqual(client.args[:2], ["--python", sys.executable])
 
-    def test_disabled_by_default_and_timeout_is_bounded(self):
+    def test_environment_client_is_reused_and_remains_alive_between_agent_calls(self):
+        with patch.dict(os.environ, {"STUDIO_UNITY_MCP_ENABLED": "1"}, clear=True):
+            first = mcp.UnityMCPClient.from_environment()
+            self.assertIs(mcp.UnityMCPClient.from_environment(), first)
+            self.assertTrue(first._persistent)
+            marker = object()
+            first.process = marker
+            asyncio.run(first.close())
+            self.assertIs(first.process, marker)
+            first.process = None
+            asyncio.run(mcp.shutdown_environment_clients())
+            self.assertFalse(first._persistent)
+
+    def test_enabled_by_default_and_explicit_opt_out_and_timeout_is_bounded(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNotNone(mcp.UnityMCPClient.from_environment())
         with patch.dict(os.environ, {"STUDIO_UNITY_MCP_ENABLED": "0"}, clear=False):
             self.assertIsNone(mcp.UnityMCPClient.from_environment())
         with self.assertRaises(ValueError):

@@ -1,0 +1,21 @@
+{
+  "assets": [
+    {
+      "id": "mountain_bg",
+      "kind": "texture",
+      "path": "Assets/Studio/Art/mountain_bg.png",
+      "width": 1024,
+      "height": 512,
+      "pixels_per_unit": 128,
+      "source": "OpenRouter image generation",
+      "model": "recraft/recraft-v4.1-flash",
+      "prompt": "2D game production asset. Minimal flat solid-color shapes using Unity built-in sprites (white square/coin textures tinted with solid colors) and a simple text UI. Background includes a simple mountain silhouette image.. Consistent palette: blue, green, yellow, white, black, lightblue, gray. Simple flat vector-style mountain silhouette background, light blue sky, gray mountains, minimal, no text, no details, suitable for a 2D mobile game background. Single asset, no text, no watermark, no sprite sheet, no collage. Wide seamless atmospheric backdrop with quiet lower foreground.",
+      "slicing": "single sprite; no sheet slicing assumed",
+      "cache_hit": false,
+      "status": "ready",
+      "requirement_ids": [
+        "R1"
+      ]
+    }
+  ]
+}

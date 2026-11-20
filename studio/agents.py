@@ -87,11 +87,34 @@ class GameDesigner:
 class UnityDeveloper:
     async def implement(self, service, spec, ui, art):
         ui_data = ui.model_dump() if hasattr(ui, "model_dump") else ui
-        result = await service.json("developer", FLEXIBLE_DEVELOPER_PROMPT,
-            {"original_request": service.job.data.get("effective_request", service.job.data["request"]), "game_spec": spec.model_dump(),
-             "ui_plan": ui_data, "assets": art, "schema": Implementation.model_json_schema()}, 16000)
-        normalized = normalize_implementation_response(result, spec)
-        return validate_implementation(spec, Implementation.model_validate(normalized))
+        value = {"original_request": service.job.data.get("effective_request", service.job.data["request"]),
+                 "game_spec": spec.model_dump(), "ui_plan": ui_data, "assets": art,
+                 "schema": Implementation.model_json_schema()}
+        # Initial contract failures happen before Unity QA has a valid plan to repair.
+        # Correct them here through the same metered gateway and job cap.
+        for attempt in range(3):
+            result = await service.json("developer", FLEXIBLE_DEVELOPER_PROMPT, value, 16000)
+            directory = getattr(service.job, "directory", None)
+            if directory is not None:
+                from studio.state import write_json
+                write_json(directory / f"implementation_response_{attempt + 1}.json", result)
+            try:
+                normalized = normalize_implementation_response(result, spec)
+                return validate_implementation(spec, Implementation.model_validate(normalized))
+            except ValueError as error:
+                diagnostics = str(error)
+                if directory is not None:
+                    write_json(directory / f"implementation_diagnostics_{attempt + 1}.json",
+                               {"error": diagnostics})
+                    service.job.event("developer", "implementation_invalid", attempt=attempt + 1,
+                                      error=diagnostics[:14000])
+                if attempt == 2:
+                    raise ValueError("Implementation validation failed after 3 attempts: " + diagnostics) from error
+                value = {**value, "previous_implementation": result, "validation_errors": diagnostics,
+                         "correction": "Return the complete corrected Implementation. Fix the reported contract errors. "
+                         "Keep all requested behavior, requirement coverage, probe IDs and expected outcomes. "
+                         "Use exact scene object IDs for probes; declare any missing gameplay objects and components. "
+                         "Do not delete probes or weaken assertions to bypass validation."}
 
     async def generate(self, service, spec, runtime_contract):
         result = await service.json("developer",
@@ -127,6 +150,43 @@ class UnityDeveloper:
 
 
 class QADebugger:
+    async def repair_scripts(self, service, spec, plan, project, diagnostics):
+        """Read real generated files and return executable patches, preserving the plan."""
+        from studio.config import safe_path
+        from studio.unity import compiler_errors
+        current = plan.model_copy(deep=True)
+        folder = project / "Assets/Studio/Generated"
+        for script in current.scripts.scripts:
+            script.content = safe_path(folder, script.filename).read_text(encoding="utf-8")
+        errors = compiler_errors(diagnostics)
+        caller = service.json
+        backend = os.environ.get("STUDIO_QA_BACKEND", "autogen")
+        if backend == "autogen":
+            from studio.frameworks import autogen_json
+            async def caller(role, system, value, max_tokens):
+                return await autogen_json(service, role, system, value, max_tokens)
+        elif backend != "direct":
+            raise ValueError("Unknown QA backend")
+        result = await caller("qa",
+            FLEXIBLE_DEVELOPER_PROMPT + " You are QA & Debugger repairing compiler errors in existing files. "
+            "Return ONLY a CodeBundle {scripts:[{filename,content}]} with complete replacement files, not advice. "
+            "Repair the failing files and any generated dependency needed for a consistent public API. "
+            "Preserve behavior, controls and original requirements. Do not edit tests, scenes or probes. "
+            "Read the provided files: fields may be private; expose proper gameplay methods rather than guessing members.",
+            {"original_request": service.job.data.get("effective_request", service.job.data["request"]),
+             "game_spec": spec.model_dump(), "compiler_errors": errors, "diagnostics": diagnostics[-12000:],
+             "current_files": current.scripts.model_dump(), "schema": CodeBundle.model_json_schema()}, 10000)
+        bundle = CodeBundle.model_validate(result)
+        by_name = {script.filename: script for script in current.scripts.scripts}
+        for replacement in bundle.scripts:
+            if replacement.filename not in by_name:
+                raise ValueError("Compiler repair may only replace existing generated scripts")
+        if not any(by_name[s.filename].content != s.content for s in bundle.scripts):
+            raise ValueError("QA returned no file changes for compiler errors")
+        for replacement in bundle.scripts:
+            by_name[replacement.filename].content = replacement.content
+        return validate_implementation(spec, current)
+
     async def review_implementation(self, service, spec, plan):
         return PlanReview.model_validate(await service.json("qa",
             "You are QA & Debugger. Compare the ORIGINAL user request, every GameSpec requirement, implementation "
@@ -192,25 +252,51 @@ Return an Implementation with scripts:{scripts:[{filename,content}]}, scenes:{ve
 Do not replace requested mechanics, genre, dimension, camera, controls or art. List unfinished R IDs in limitations.
 Generate standalone public MonoBehaviour classes with file names matching class names, no namespaces.
 Use UnityEngine and UnityEngine.InputSystem (Keyboard.current/Mouse.current), not the legacy Input API.
+Guard Keyboard.current/Mouse.current for null on mobile. Rigidbody2D uses linearVelocity in Unity 6.
+Any script that reads Rigidbody/Rigidbody2D or a Collider in Awake/Start must declare the matching
+[RequireComponent] attributes, cache and validate those components before use. Declare those exact
+components on the same scene object. A 2D physics object must not carry a 3D Rigidbody or Collider.
+Unity's Cube primitive includes a 3D BoxCollider; when using it for 2D physics, rely on the scene
+builder to remove that implicit 3D collider and declare the needed 2D colliders explicitly.
+UnityEngine.UI.Button exposes onClick, NOT onPointerUp/onPointerDown/onPointerExit/onPointerCancel events.
+For held touch controls use IPointerDownHandler/IPointerUpHandler/IPointerExitHandler and ICancelHandler
+on a MonoBehaviour attached to the button (OnCancel, not OnPointerCancel), or EventTrigger entries.
+Release held input on pointer-up/exit/cancel/OnDisable. Keep keyboard and touch input independent.
+For generated UGUI held buttons, attach Studio.Runtime.TouchPad and set its action to left, right or jump;
+include EventSystem plus UnityEngine.InputSystem.UI.InputSystemUIInputModule for pointer delivery.
+Place a Text label on a child of an Image/Button; Unity allows only one Graphic component on each GameObject.
+Only call public gameplay methods/fields that actually exist in the generated scripts.
+Every non-optional public Component field used at runtime must be assigned in the scene specification
+to an existing object ID and the exact component type; never leave score, win, camera or gameplay
+references unwired. Add null guards only for genuinely optional references.
 No editor APIs, file IO, networking, reflection, processes, unsafe code, external dependencies or package installs.
 Use multiple scripts as needed; never force LevelRules or GeneratedRules on a game. Bounded code output is not a license to drop requirements.
 Every scene is EXPLICIT: include Camera components, projection/FOV/size/position/rotation, lights for 3D,
+Use fully qualified built-in component types, e.g. UnityEngine.Camera and UnityEngine.UI.Button.
 all gameplay components, physics 2D or 3D as appropriate, UI and references. No camera/player/ground/menu is injected.
 The builder supports primitives, custom mesh vertices/triangles, model/prefab paths and material IDs.
 Primitives are appropriate only when the design calls for geometric/procedural forms, not substitutes for requested artwork.
 Asset paths come from the art manifest; status != ready is a missing asset, not completed work.
 For model/prefab use object.model; for sprites use object.sprite; texture paths go on materials.
 Scene properties: kind float/int/bool/string/enum/color/vector2/vector3/reference/asset, value always string.
-Vectors use JSON arrays in value, enums use their enum name, reference uses objectID:Full.Component.Type
-or objectID for a GameObject; asset uses Assets/... path. Transform references use UnityEngine.Transform.
-Object position/scale/rotation are arrays; rotation uses Euler degrees. Parent IDs preserve WORLD transforms.
+Vectors use JSON arrays in value; enums must use the exact Unity enum member (UGUI Text alignment uses
+MiddleCenter, not Center). For a Component-typed reference always use
+objectID:Full.Component.Type (for example player:UnityEngine.Transform or manager:CoinCollector); use a
+plain objectID only when the destination field/property is a GameObject. Asset uses an Assets/... path.
+Transform references use UnityEngine.Transform.
+Object position/scale/rotation are arrays; rotation uses Euler degrees. Parent IDs preserve world transforms,
+except parented RectTransform UI, where position is the anchored screen-space offset from its Canvas.
 UI can be created dynamically by gameplay scripts using UnityEngine.UI and InputSystemUIInputModule, or explicit components.
 Do not use UnityEditor in runtime. Scene transitions use UnityEngine.SceneManagement.
 Expose real gameplay operations/state for tests. Probes operate each from a freshly loaded named scene.
-Probe steps: wait(frames), key(member=InputSystem key name,value=true/false),
+Every probe object_id must be an exact objects[].id in that probe's scene, not a display name,
+component name or undeclared runtime-created object. Declare tested objects in the scene; scripts may populate their children.
+wait/key steps and scene assertions do not need object_id. Object-targeted steps/assertions require one.
+Probe steps: wait(frames), key(member=InputSystem Key enum name such as D, Space or LeftArrow,value=true/false),
 invoke(object_id,component,member=public zero-arg gameplay method), set(public field/property,value string),
-click(object_id=Button ID). No test-only methods which fake success.
-Assertions: exists/active(object_id,value=true/false), property(object_id,component,member,comparison,value),
+click(object_id=Button ID), pointer(object_id=touch button,value=down/up). No test-only methods which fake success.
+Assertions: exists/active(object_id,value=true/false), property(object_id,component,member,comparison,value).
+Property assertions may read a public field, property, or zero-argument state getter.
 position_changed(object_id,value=min distance), scene(value=scene name).
 Test actual controls, movement, collisions/progression and win conditions, not simply labels or configuration.
 Tie probes and objects to R IDs. Do not claim verification; only Unity execution can produce evidence.

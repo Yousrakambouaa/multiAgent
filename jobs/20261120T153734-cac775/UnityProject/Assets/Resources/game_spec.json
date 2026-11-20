@@ -1,0 +1,239 @@
+{
+  "version": 2,
+  "name": "Coin Collector",
+  "genre": "2D Arcade Collector",
+  "dimension": "2D",
+  "camera_perspective": "Fixed orthographic side view, camera perpendicular to the 2D plane, showing the full play area with ground at bottom and coins above.",
+  "target_platform": "Mobile (Android/iOS) with PC testing support",
+  "orientation": "landscape",
+  "art_style": "Minimal flat solid-color shapes using Unity built-in sprites (white square/circle tinted) and simple text UI. No textures, no gradients, no external assets.",
+  "palette": [
+    "blue",
+    "green",
+    "yellow",
+    "white",
+    "black"
+  ],
+  "mechanics": [
+    "Player moves left and right",
+    "Player jumps",
+    "Coin collection increases score by 1",
+    "Coin removed upon collection",
+    "Win condition when all 5 coins collected"
+  ],
+  "controls": [
+    "Keyboard: A/D or Left/Right arrows to move left/right",
+    "Keyboard: Space or Up arrow to jump",
+    "Mobile: On-screen left and right touch buttons for movement",
+    "Mobile: On-screen jump touch button"
+  ],
+  "level_structure": "Single flat green ground spanning the width of the screen. Player blue square rests on the ground. Five yellow coins are placed above the ground at varying horizontal positions and heights, all reachable by jumping. No enemies, no obstacles, no additional platforms.",
+  "ui_requirements": [
+    "Score text displaying current score",
+    "Win text displaying \"YOU WIN!\" when all 5 coins collected",
+    "Mobile touch buttons for left, right, and jump"
+  ],
+  "scenes": [
+    "MainGame"
+  ],
+  "required_assets": [],
+  "requirements": [
+    {
+      "id": "R001",
+      "original_instruction": "create Create a very simple 2D mobile game called Coin Collector.",
+      "implementation": "Set up a Unity 2D project with a single scene named MainGame. Configure the project for 2D and mobile build support. The game title is Coin Collector.",
+      "owner": "designer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R002",
+      "original_instruction": "The player is a blue square that moves left and right and jumps on a flat green ground.",
+      "implementation": "Create a player GameObject as a blue square (SpriteRenderer with solid blue color, BoxCollider2D, Rigidbody2D). Implement horizontal movement with keyboard and touch input, and jumping with a single jump (ground check). Create a flat green ground GameObject (SpriteRenderer with solid green color, BoxCollider2D) spanning the screen width.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R003",
+      "original_instruction": "Place 5 yellow coins above the ground.",
+      "implementation": "Create 5 coin GameObjects, each a yellow circle (SpriteRenderer with solid yellow color, CircleCollider2D). Position them above the ground at different x-coordinates and heights, all within reach of the player's jump.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R004",
+      "original_instruction": "Collecting a coin increases the score by 1 and removes the coin.",
+      "implementation": "Implement OnTriggerEnter2D on the player to detect coin collisions. When a coin is collected, increment the score variable by 1, update the score UI text, and deactivate/destroy the coin GameObject.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R005",
+      "original_instruction": "When all 5 coins are collected, display \"YOU WIN!\".",
+      "implementation": "Track the number of collected coins. When the count reaches 5, set a win flag and display a Text UI element with the exact string \"YOU WIN!\". Optionally stop further input.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R006",
+      "original_instruction": "Use only Unity built-in shapes, solid colors, and a simple text UI.",
+      "implementation": "Ensure all visual elements use Unity's built-in Sprite shapes (e.g., Square, Circle) with solid color materials. UI uses Unity's Text (legacy) or TextMeshPro with simple text. No external assets, no textures, no custom shaders.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R007",
+      "original_instruction": "One scene, one level, no enemies, no textures, no external assets, no animations, and no sound.",
+      "implementation": "The project contains exactly one scene (MainGame) and one level. No enemy GameObjects, no texture assets, no external asset imports, no Animator components or animation clips, and no AudioSource or audio clips.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R008",
+      "original_instruction": "Keep everything minimal, functional, and easy to test.",
+      "implementation": "Use simple scripts with clear public variables for speeds and jump force. Ensure the game can be tested quickly in the Unity Editor with keyboard and via mobile build with touch buttons. Avoid unnecessary complexity.",
+      "owner": "developer",
+      "verification_method": "manual"
+    },
+    {
+      "id": "R009",
+      "original_instruction": "Use keyboard controls for PC testing and simple touch buttons for mobile.",
+      "implementation": "Implement input handling that reads keyboard (A/D, arrows, Space) for PC and provides on-screen touch buttons (left, right, jump) for mobile. Touch buttons are UI Buttons that set movement flags or trigger jump when pressed.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T001",
+      "description": "Create Unity 2D project structure with a single scene named MainGame. Configure project settings for 2D and mobile.",
+      "owner": "developer",
+      "dependencies": [],
+      "requirement_ids": [
+        "R001",
+        "R007"
+      ]
+    },
+    {
+      "id": "T002",
+      "description": "Create player GameObject: blue square sprite, BoxCollider2D, Rigidbody2D. Create ground GameObject: green rectangle sprite, BoxCollider2D. Position ground at bottom.",
+      "owner": "developer",
+      "dependencies": [
+        "T001"
+      ],
+      "requirement_ids": [
+        "R002",
+        "R006"
+      ]
+    },
+    {
+      "id": "T003",
+      "description": "Create 5 coin GameObjects: yellow circle sprites with CircleCollider2D, positioned above ground at varied locations.",
+      "owner": "developer",
+      "dependencies": [
+        "T002"
+      ],
+      "requirement_ids": [
+        "R003",
+        "R006"
+      ]
+    },
+    {
+      "id": "T004",
+      "description": "Implement player movement and jump script with keyboard input (A/D, arrows, Space) and ground check. Use Rigidbody2D for physics.",
+      "owner": "developer",
+      "dependencies": [
+        "T002"
+      ],
+      "requirement_ids": [
+        "R002",
+        "R009"
+      ]
+    },
+    {
+      "id": "T005",
+      "description": "Implement coin collection script: OnTriggerEnter2D, increment score, update UI, deactivate coin. Track collected count.",
+      "owner": "developer",
+      "dependencies": [
+        "T003"
+      ],
+      "requirement_ids": [
+        "R004",
+        "R005"
+      ]
+    },
+    {
+      "id": "T006",
+      "description": "Create UI Canvas with score text and win text. Score text displays current score. Win text hidden initially, shown when all coins collected.",
+      "owner": "developer",
+      "dependencies": [
+        "T005"
+      ],
+      "requirement_ids": [
+        "R005",
+        "R006"
+      ]
+    },
+    {
+      "id": "T007",
+      "description": "Create mobile touch buttons: left, right, jump as UI Buttons. Wire them to set movement flags and trigger jump. Ensure they only appear on mobile or are always visible but functional.",
+      "owner": "developer",
+      "dependencies": [
+        "T004",
+        "T006"
+      ],
+      "requirement_ids": [
+        "R009"
+      ]
+    },
+    {
+      "id": "T008",
+      "description": "Test the game in Unity Editor: verify player moves, jumps, collects coins, score updates, win text appears. Test with keyboard.",
+      "owner": "qa",
+      "dependencies": [
+        "T004",
+        "T005",
+        "T006",
+        "T007"
+      ],
+      "requirement_ids": [
+        "R002",
+        "R004",
+        "R005",
+        "R008",
+        "R009"
+      ]
+    },
+    {
+      "id": "T009",
+      "description": "Build for mobile and test touch buttons on a device or simulator. Verify all controls work and game is functional.",
+      "owner": "qa",
+      "dependencies": [
+        "T007",
+        "T008"
+      ],
+      "requirement_ids": [
+        "R009"
+      ]
+    }
+  ],
+  "assumptions": [
+    "The game uses Unity's built-in Sprite shapes (Square, Circle) with solid color materials; no external images or textures.",
+    "The player is a square of size 1x1 unit, ground is a rectangle spanning the screen width.",
+    "Coins are circles of diameter 0.5 units, placed at heights reachable by a single jump.",
+    "The score starts at 0 and is displayed as 'Score: 0'.",
+    "The win text 'YOU WIN!' is displayed centered on screen when all coins are collected.",
+    "The game is landscape orientation, but the scene can be adapted to any aspect ratio.",
+    "Touch buttons are always visible on screen for simplicity, but can be hidden on PC if desired.",
+    "The player can only jump when on the ground (single jump).",
+    "The game ends after win condition is met; no restart or additional levels.",
+    "No animations, sound, or external assets are used."
+  ],
+  "clarification_questions": [],
+  "limitations": [
+    "No external assets, textures, animations, or sound are used as per request.",
+    "The game is minimal and does not include features like menus, restart, or multiple levels.",
+    "Touch buttons are simple UI buttons; no swipe or gesture controls.",
+    "The game may not be fully optimized for all mobile aspect ratios, but should work on standard screens.",
+    "No 3D models or complex geometry; all shapes are 2D sprites."
+  ]
+}

@@ -1,0 +1,160 @@
+{
+  "probes": [
+    {
+      "id": "probe_player_movement",
+      "requirement_ids": [
+        "R002",
+        "R008"
+      ],
+      "scene": "MainGame",
+      "steps": [
+        {
+          "action": "key",
+          "object_id": "",
+          "component": "",
+          "member": "rightArrowKey",
+          "value": "true",
+          "frames": 1
+        },
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 10
+        },
+        {
+          "action": "key",
+          "object_id": "",
+          "component": "",
+          "member": "rightArrowKey",
+          "value": "false",
+          "frames": 1
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "position_changed",
+          "object_id": "Player",
+          "component": "",
+          "member": "",
+          "comparison": "equals",
+          "value": "0.1"
+        }
+      ]
+    },
+    {
+      "id": "probe_coin_collection",
+      "requirement_ids": [
+        "R003",
+        "R004"
+      ],
+      "scene": "MainGame",
+      "steps": [
+        {
+          "action": "invoke",
+          "object_id": "Player",
+          "component": "PlayerController",
+          "member": "MoveRight",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 30
+        },
+        {
+          "action": "invoke",
+          "object_id": "Player",
+          "component": "PlayerController",
+          "member": "Jump",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 30
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "property",
+          "object_id": "CoinCollector",
+          "component": "CoinCollector",
+          "member": "collectedCoins",
+          "comparison": "greater",
+          "value": "0"
+        }
+      ]
+    },
+    {
+      "id": "probe_win_condition",
+      "requirement_ids": [
+        "R005",
+        "R006"
+      ],
+      "scene": "MainGame",
+      "steps": [
+        {
+          "action": "invoke",
+          "object_id": "CoinCollector",
+          "component": "CoinCollector",
+          "member": "CollectCoin",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "invoke",
+          "object_id": "CoinCollector",
+          "component": "CoinCollector",
+          "member": "CollectCoin",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "invoke",
+          "object_id": "CoinCollector",
+          "component": "CoinCollector",
+          "member": "CollectCoin",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "invoke",
+          "object_id": "CoinCollector",
+          "component": "CoinCollector",
+          "member": "CollectCoin",
+          "value": "",
+          "frames": 1
+        },
+        {
+          "action": "invoke",
+          "object_id": "CoinCollector",
+          "component": "CoinCollector",
+          "member": "CollectCoin",
+          "value": "",
+          "frames": 1
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "active",
+          "object_id": "WinText",
+          "component": "",
+          "member": "",
+          "comparison": "equals",
+          "value": "true"
+        }
+      ]
+    }
+  ]
+}

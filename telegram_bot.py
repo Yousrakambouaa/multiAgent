@@ -220,12 +220,17 @@ async def on_startup(application):
         application.create_task(resume())
 
 
+async def on_shutdown(application):
+    from studio.mcp_client import shutdown_environment_clients
+    await shutdown_environment_clients()
+
+
 def build_application():
     token=os.environ.get("TELEGRAM_BOT_TOKEN","").strip()
     if not token: raise RuntimeError("Set TELEGRAM_BOT_TOKEN in .env")
     try: int(os.environ["TELEGRAM_ALLOWED_USER_ID"])
     except (KeyError,ValueError) as error: raise RuntimeError("Set numeric TELEGRAM_ALLOWED_USER_ID in .env") from error
-    app=ApplicationBuilder().token(token).post_init(on_startup).build()
+    app=ApplicationBuilder().token(token).post_init(on_startup).post_shutdown(on_shutdown).build()
     for command,callback in {"start":start,"help":start,"myid":myid,"create":create_game,"status":status,
             "plan":plan,"approve":approve,"cancel":cancel,"budget":budget,"result":result}.items():
         app.add_handler(CommandHandler(command,callback))

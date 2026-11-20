@@ -230,7 +230,7 @@ class SceneBundleV2(Contract):
 
 
 class ProbeStep(Contract):
-    action: Literal["wait", "invoke", "set", "key", "click"]
+    action: Literal["wait", "invoke", "set", "key", "click", "pointer"]
     object_id: str = ""
     component: str = ""
     member: str = ""
@@ -339,16 +339,41 @@ def validate_implementation(spec, plan):
     for scene in plan.scenes.scenes:
         if not set(scene.requirement_ids) <= reqs:
             raise ValueError("Unknown scene requirement")
+        if not any(component.type.rsplit(".", 1)[-1] == "Camera"
+                   for obj in scene.objects for component in obj.components):
+            raise ValueError(f"Scene {scene.name!r} must explicitly declare a Camera so the game is visible.")
         for obj in scene.objects:
             if not set(obj.requirement_ids) <= reqs or (obj.material and obj.material not in materials):
                 raise ValueError("Unknown object requirement or material")
+            component_names = {component.type.rsplit(".", 1)[-1] for component in obj.components}
+            graphics = component_names.intersection({"Image", "RawImage", "Text", "TextMeshProUGUI", "TMP_Text"})
+            if len(graphics) > 1:
+                raise ValueError(f"Object {obj.id!r} has multiple UGUI Graphic components; place Text labels on child objects.")
+            if "Button" in component_names and not graphics.intersection({"Image", "RawImage", "Text", "TextMeshProUGUI", "TMP_Text"}):
+                raise ValueError(f"Button {obj.id!r} needs a Graphic component such as Image.")
     for probe in plan.probes:
         if not set(probe.requirement_ids) <= reqs or probe.scene not in spec.scenes:
             raise ValueError("Unknown probe requirement or scene")
-        ids = {o.id for s in plan.scenes.scenes if s.name == probe.scene for o in s.objects}
-        for item in [*probe.steps, *probe.assertions]:
-            if item.object_id and item.object_id not in ids:
-                raise ValueError("Unknown probe object")
+        objects = next(s.objects for s in plan.scenes.scenes if s.name == probe.scene)
+        ids = {o.id for o in objects}
+        names = {o.name: o.id for o in objects}
+        available = ", ".join(sorted(ids))
+        for section, items in (("steps", probe.steps), ("assertions", probe.assertions)):
+            for index, item in enumerate(items):
+                # These operations never look up an object in the Unity harness.
+                if section == "steps" and item.action in ("wait", "key"):
+                    continue
+                if section == "assertions" and item.kind == "scene":
+                    continue
+                # Models sometimes use the display name instead of the stable ID.
+                # Names are unique within a scene; never guess a different object.
+                if item.object_id not in ids and item.object_id in names:
+                    item.object_id = names[item.object_id]
+                if item.object_id not in ids:
+                    raise ValueError(
+                        f"Unknown probe object {item.object_id!r}: probe {probe.id!r}, "
+                        f"scene {probe.scene!r}, {section}[{index}]. "
+                        f"Use an object ID declared in that scene. Available IDs: {available}")
     return plan
 
 

@@ -7,6 +7,7 @@ import httpx
 
 from studio.costs import BudgetExceeded, Ledger
 from studio.state import JobCancelled
+from studio.openrouter import api_key, authentication_error
 
 
 class ServiceRejected(RuntimeError):
@@ -105,12 +106,13 @@ class ModelService:
 
     async def post(self, route, payload, role, model, ceiling):
         self.job.check_cancelled()
+        key = api_key()
         entry = self.ledger.reserve(role, model, ceiling)
         self.job.event(role, "api_call", model=model, reserved_usd=ceiling)
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(180, connect=20)) as client:
                 response = await client.post("https://openrouter.ai/api/v1/" + route,
-                    headers={"Authorization": "Bearer " + os.environ["OPENROUTER_API_KEY"]}, json=payload)
+                    headers={"Authorization": "Bearer " + key}, json=payload)
                 try:
                     data = response.json()
                 except ValueError as error:
@@ -129,10 +131,13 @@ class ModelService:
                         message = "request rejected"
                     for key in ("OPENROUTER_API_KEY", "TELEGRAM_BOT_TOKEN"):
                         secret = os.environ.get(key)
-                        if secret: message = message.replace(secret, "[redacted]")
+                        if secret:
+                            message = message.replace(secret, "[redacted]").replace(secret.strip(), "[redacted]")
                     provider_error = data.get("error")
                     code = provider_error.get("code") if isinstance(provider_error, dict) else None
                     status = int(code) if str(code).isdigit() else response.status_code
+                    if status == 401:
+                        message = authentication_error()
                     try:
                         retry_after = max(0, float(response.headers.get("Retry-After", "1")))
                     except ValueError:
@@ -159,8 +164,12 @@ class ModelService:
         errors = []
         candidates = list(self.registry.candidates(role))
         if not candidates:
-            raise RuntimeError(f"No configured {role} model is available with JSON output and permitted pricing")
+            raise RuntimeError(f"No configured {role} model or automatic fallback is available with JSON output "
+                               "and permitted pricing. Check studio_models.json and run main.py models.")
+        free_only = False
         for model in candidates:
+            if free_only and not model.endswith(":free"):
+                continue
             prompt_price, completion_price = self.registry.rates(model)
             request_max_tokens = max_tokens
             for attempt in range(2):
@@ -189,6 +198,14 @@ class ModelService:
                                        requested_tokens=request_max_tokens, retry_tokens=reduced_limit)
                         request_max_tokens = reduced_limit
                         continue
+                    if isinstance(error, ServiceRejected) and error.status == 402:
+                        if reduced_limit is not None:
+                            # A cheaper configured/discovered model may fit even
+                            # after this model's reduced-token request was rejected.
+                            break
+                        if any(mid.endswith(":free") for mid in candidates[candidates.index(model) + 1:]):
+                            free_only = True
+                            break
                     if isinstance(error, ServiceRejected) and error.status in (401, 402, 403):
                         raise RuntimeError("Configured model attempts failed: " + "; ".join(errors)) from error
                     transient = isinstance(error, ServiceRejected) and error.status in (408, 429, 500, 502, 503, 504)

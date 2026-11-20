@@ -4,6 +4,8 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.UI;
 using Studio.Runtime;
 
 public class PromptSceneTests {
@@ -13,16 +15,39 @@ public class PromptSceneTests {
         CollectionAssert.AreEqual(bundle.scenes.Select(s=>"Assets/Studio/Scenes/"+s.name+".unity").ToArray(),EditorBuildSettings.scenes.Select(s=>s.path).ToArray());
         foreach(var spec in bundle.scenes) {
             var scene=EditorSceneManager.OpenScene("Assets/Studio/Scenes/"+spec.name+".unity",OpenSceneMode.Single);
+            Assert.IsNotEmpty(scene.GetRootGameObjects().SelectMany(r=>r.GetComponentsInChildren<Camera>(true)),spec.name+" has no camera");
             var ids=scene.GetRootGameObjects().SelectMany(r=>r.GetComponentsInChildren<StudioObjectId>(true)).ToDictionary(i=>i.id,i=>i.gameObject);
             foreach(var obj in spec.objects) {
                 Assert.IsTrue(ids.ContainsKey(obj.id),obj.id);
                 var go=ids[obj.id];
                 Assert.AreEqual(obj.active,go.activeSelf,obj.id);
-                Assert.Less(Vector3.Distance(new Vector3(obj.position[0],obj.position[1],obj.position[2]),go.transform.position),.001f,obj.id);
+                var rect=go.GetComponent<RectTransform>();
+                if(rect==null) {
+                    var expectedPosition=new Vector3(obj.position[0],obj.position[1],obj.position[2]);
+                    Assert.Less(Vector3.Distance(expectedPosition,go.transform.position),.001f,obj.id);
+                } else if(go.GetComponent<Canvas>()==null) {
+                    var expectedPosition=new Vector3(obj.position[0],obj.position[1],obj.position[2]);
+                    Assert.Less(Vector3.Distance(expectedPosition,rect.anchoredPosition3D),.001f,obj.id);
+                }
                 foreach(var comp in obj.components) Assert.NotNull(go.GetComponent(UniversalSceneBuilder.Resolve(comp.type)),obj.id+":"+comp.type);
+                var image=go.GetComponent<Image>();
+                if(image!=null) Assert.NotNull(image.sprite,obj.id+" has an Image with no visible sprite");
+                var button=go.GetComponent<Button>();
+                if(button!=null) Assert.NotNull(button.targetGraphic,obj.id+" has no Button target Graphic");
+                var text=go.GetComponent<Text>();
+                if(text!=null) Assert.NotNull(text.font,obj.id+" has no UI font");
+                if(go.GetComponent<Rigidbody2D>()!=null || go.GetComponents<Collider2D>().Length>0) {
+                    Assert.IsNull(go.GetComponent<Rigidbody>(),obj.id+" mixes 2D and 3D rigidbodies");
+                    Assert.IsEmpty(go.GetComponents<Collider>(),obj.id+" retains an implicit 3D collider");
+                }
                 if(!string.IsNullOrEmpty(obj.sprite)) Assert.NotNull(go.GetComponent<SpriteRenderer>().sprite,obj.id);
                 if(!string.IsNullOrEmpty(obj.model)) Assert.IsTrue(PrefabUtility.IsPartOfPrefabInstance(go),obj.id);
                 if(obj.mesh!=null && obj.mesh.vertices!=null && obj.mesh.vertices.Length>0) Assert.NotNull(go.GetComponent<MeshFilter>().sharedMesh);
+            }
+            if(spec.objects.Any(o=>o.components.Any(c=>c.type.EndsWith("Button")))) {
+                Assert.IsTrue(ids.Values.Any(go=>go.GetComponent<EventSystem>()!=null),"Missing UI EventSystem");
+                var inputModule=UniversalSceneBuilder.Resolve("UnityEngine.InputSystem.UI.InputSystemUIInputModule");
+                Assert.IsTrue(ids.Values.Any(go=>go.GetComponent(inputModule)!=null),"Missing Input System UI module");
             }
         }
     }

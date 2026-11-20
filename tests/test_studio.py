@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -109,6 +110,8 @@ class VerificationTests(unittest.TestCase):
 
 class SupervisorTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        backend=patch.dict(os.environ,{"STUDIO_UNITY_MODE":"batch","STUDIO_UNITY_MCP_ENABLED":"0"})
+        backend.start();self.addCleanup(backend.stop)
         self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name); self.studio=Supervisor(self.root)
 
@@ -245,6 +248,10 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FailedJobRetryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        backend=patch.dict(os.environ,{"STUDIO_UNITY_MODE":"batch","STUDIO_UNITY_MCP_ENABLED":"0"})
+        backend.start();self.addCleanup(backend.stop)
+
     async def test_approve_retries_failed_job_from_its_saved_spec(self):
         _,spec,_=examples("racing")
         job=SimpleNamespace(directory=Path("virtual-job"),data={"id":"retry-test","request":"Create a 3D racing game",

@@ -102,7 +102,15 @@ def main():
     for name in ("models","status","plan","cancel","mcp-status","mcp-smoke"): sub.add_parser(name)
     args=parser.parse_args()
     with ProcessLock(ROOT/".studio_cache"/"controller.lock"):
-        return asyncio.run(run(args))
+        return asyncio.run(run_and_shutdown(args))
+
+
+async def run_and_shutdown(args):
+    try:
+        return await run(args)
+    finally:
+        from studio.mcp_client import shutdown_environment_clients
+        await shutdown_environment_clients()
 
 
 if __name__=="__main__":
