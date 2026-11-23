@@ -1,0 +1,15 @@
+{
+  "id": "20261123T164721-c03572",
+  "request": "Create a simple 3D driving game with a vehicle, track, camera, and finish condition.",
+  "chat_id": null,
+  "status": "planning",
+  "stage": "validation",
+  "created_at": "2026-11-23T16:47:21.223733+00:00",
+  "updated_at": "2026-11-23T16:47:21.223733+00:00",
+  "cap_usd": 2,
+  "costs": [],
+  "tasks": [],
+  "artifacts": [],
+  "cancel_requested": false,
+  "repairs": 0
+}

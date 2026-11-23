@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import hashlib
+import re
 
 from telegram import BotCommand, BotCommandScopeChat, Update
 from telegram.error import Conflict
@@ -39,6 +40,24 @@ async def start(update,context):
     await update.effective_message.reply_text(HELP_TEXT)
 
 
+async def reply_chunks(message, text):
+    # Plans can exceed Telegram's 4096-character limit. Keep the approval prompt.
+    while text:
+        end = min(len(text), 3500)
+        while len(text[:end].encode("utf-16-le")) // 2 > 3500:
+            end -= 1
+        await message.reply_text(text[:end])
+        text = text[end:]
+
+
+def operation_running(application):
+    task = application.bot_data.get("operation")
+    if isinstance(task, asyncio.Task) and task.done():
+        application.bot_data.pop("operation", None)
+        return False
+    return bool(task)
+
+
 async def myid(update,context):
     await update.effective_message.reply_text(f"Your Telegram ID: {update.effective_user.id}")
 
@@ -58,7 +77,7 @@ async def status(update,context):
 
 
 async def plan(update,context):
-    if await guard(update): await update.effective_message.reply_text(supervisor(context).plan_text()[:3900])
+    if await guard(update): await reply_chunks(update.effective_message, supervisor(context).plan_text())
 
 
 async def budget(update,context):
@@ -68,12 +87,26 @@ async def budget(update,context):
 
 
 async def cancel(update,context):
-    if await guard(update): await update.effective_message.reply_text(supervisor(context).cancel())
+    if not await guard(update): return
+    studio = supervisor(context)
+    message = studio.cancel()
+    task = context.application.bot_data.get("operation")
+    if (studio.job and studio.job.data.get("cancel_requested") and studio.job.data.get("status") == "planning"
+            and isinstance(task, asyncio.Task)):
+        task.cancel()
+    await update.effective_message.reply_text(message)
 
 
 async def deliver(bot,chat_id,job):
     if job.data["status"] not in ("completed", "partial"):
-        await bot.send_message(chat_id,"No completed, verified result yet. Use /status."); return
+        report=job.data.get("failure_report") or {}
+        if report:
+            await bot.send_message(chat_id, f"Job stopped during {report.get('stage', 'generation')}: "
+                f"{report.get('type', 'generation workflow')}. {report.get('root_cause', 'The job could not complete.')} "
+                f"Repairs attempted: {report.get('repairs_attempted', 0)}. {report.get('needed', 'Review the saved job and retry.')}")
+        else:
+            await bot.send_message(chat_id,"No completed result yet. Use /status to inspect the saved job.")
+        return
     if job.data["status"] == "partial":
         await bot.send_message(chat_id,"Partial prototype: some requested work or verification remains incomplete. Read validation_report.json and requirements.json.")
     delivery={"at":now(),"status":"sending","sent":[],"skipped":[]}
@@ -117,7 +150,10 @@ async def operation(update,context,callback):
         message=str(error) if isinstance(error,(ValueError,RuntimeError)) else type(error).__name__
         await update.effective_message.reply_text(message[:1800])
     finally:
-        context.application.bot_data.pop("operation",None)
+        current = context.application.bot_data.get("operation")
+        if current is asyncio.current_task() or current is True:
+            context.application.bot_data.pop("operation",None)
+            context.application.bot_data.pop("pre_job_instructions",None)
 
 
 async def handle_request(update,context,request,explicit_create=False):
@@ -126,6 +162,17 @@ async def handle_request(update,context,request,explicit_create=False):
     if not request or request.casefold() in NOISE or len(request)>4000:
         await update.effective_message.reply_text("I only create Unity games. Please describe a specific game, including its mechanics and perspective.\nExample: /create A 3D driving game with a track and finish line."); return
     studio=supervisor(context)
+    update_id = getattr(update, "update_id", None)
+    if isinstance(update_id, int):
+        seen = context.application.bot_data.setdefault("handled_requests", [])
+        if update_id in seen:
+            return
+        seen.append(update_id)
+        del seen[:-100]
+    running = operation_running(context.application)
+    # An explicit new game must never become an instruction on an older game.
+    if explicit_create and not running and not studio.lock.locked() and studio.job and studio.job.data.get("status") in ("awaiting_approval", "interrupted"):
+        studio.cancel()
     # Older versions stored a rejected job after asking a question. Reattach a
     # plain-text answer to that exact request instead of starting from the answer
     # alone and falling into another clarification cycle.
@@ -137,7 +184,10 @@ async def handle_request(update,context,request,explicit_create=False):
             await update.effective_message.reply_text("I found your previous game request, but it plus this answer exceeds 4,000 characters. Use /create with a shorter combined description."); return
         explicit_create=True
         await update.effective_message.reply_text("Using your answer with the saved game request and starting generation.")
-    if context.application.bot_data.get("operation") or studio.busy():
+    if running or studio.busy():
+        if explicit_create:
+            await update.effective_message.reply_text("A game operation is still running. Use /cancel, wait for it to stop, then send /create with the new description.")
+            return
         job=studio.job
         if job and job.data.get("status") in ("planning","building","awaiting_approval","interrupted"):
             await update.effective_message.reply_text(studio.add_instruction(request)); return
@@ -145,41 +195,75 @@ async def handle_request(update,context,request,explicit_create=False):
             context.application.bot_data.setdefault("pre_job_instructions",[]).append(request)
             await update.effective_message.reply_text("Saved this instruction for the game creation that is starting."); return
         await update.effective_message.reply_text("An active job already exists. Use /status or /cancel."); return
-    context.application.bot_data["operation"]=True
+    if explicit_create:
+        context.application.bot_data.pop("pre_job_instructions", None)
     async def work():
+        await update.effective_message.reply_text("Planning your game. I’ll send the generated plan for /approve before starting Unity.")
         initial=context.application.bot_data.pop("pre_job_instructions",[])
-        await studio.submit(request,chat_id=update.effective_chat.id,notify=update.effective_message.reply_text,
+        async def notify(text):
+            await reply_chunks(update.effective_message, text)
+        job = await studio.submit(request,chat_id=update.effective_chat.id,notify=notify,
             explicit_create=explicit_create,initial_instructions=initial)
-        if studio.job.data["status"] in ("rejected","unsupported"):
-            await update.effective_message.reply_text(studio.job.data["error"])
-        elif studio.job.data["status"] in ("completed","partial"):
-            await deliver(context.bot,update.effective_chat.id,studio.job)
-    context.application.create_task(operation(update,context,work),update=update)
+        if job.data["status"] in ("rejected","unsupported"):
+            await update.effective_message.reply_text(job.data["error"])
+        elif job.data["status"] in ("completed","partial"):
+            await deliver(context.bot,update.effective_chat.id,job)
+    context.application.bot_data["operation"] = context.application.create_task(operation(update,context,work),update=update)
 
 
 async def create_game(update,context):
-    await handle_request(update,context," ".join(context.args),explicit_create=True)
+    if not await guard(update): return
+    request = " ".join(context.args)
+    if not request:
+        await update.effective_message.reply_text("Use /create <game description>. Example: /create A 3D driving game with a finish line.")
+        return
+    await handle_request(update,context,request,explicit_create=True)
 
 
 async def text_message(update,context):
+    if (update.effective_message.text or "").lstrip().startswith("/"):
+        await unsupported_message(update, context)
+        return
     await handle_request(update,context,update.effective_message.text)
 
 
 async def approve(update,context):
     if not await guard(update): return
-    if context.application.bot_data.get("operation"):
+    if operation_running(context.application):
         await update.effective_message.reply_text("An operation is already running. Use /status."); return
     studio=supervisor(context)
-    context.application.bot_data["operation"]=True
     async def work():
-        artifacts=await studio.approve(notify=update.effective_message.reply_text)
+        async def notify(text):
+            await reply_chunks(update.effective_message, text)
+        artifacts=await studio.approve(notify=notify)
         if artifacts:
             await deliver(context.bot,update.effective_chat.id,studio.job)
-    context.application.create_task(operation(update,context,work),update=update)
+    context.application.bot_data["operation"] = context.application.create_task(operation(update,context,work),update=update)
 
 
 async def unsupported_message(update,context):
-    if await guard(update): await update.effective_message.reply_text(HELP_TEXT)
+    if not await guard(update): return
+    # CommandHandler requires a BOT_COMMAND entity at offset 0. Recover pasted,
+    # indented or caption commands without returning the unrelated /start menu.
+    message = update.effective_message
+    match = re.fullmatch(r"/([a-z][a-z0-9_]*)(?:@([a-z0-9_]+))?(?:\s+(.*))?", (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip(), re.I | re.S)
+    if match:
+        name, username, arguments = match.groups()
+        own_name = context.bot.username
+        if username and isinstance(own_name, str) and username.casefold() != own_name.casefold():
+            return
+        handlers = {"start": start, "help": start, "myid": myid, "create": create_game,
+                    "status": status, "plan": plan, "approve": approve, "cancel": cancel,
+                    "budget": budget, "result": result}
+        callback = handlers.get(name.casefold())
+        if callback:
+            logger.info("Recovered Telegram command /%s from fallback (update_id=%s)", name.casefold(), getattr(update, "update_id", None))
+            context.args = (arguments or "").split()
+            await callback(update, context)
+            return
+        await message.reply_text("Unknown command. Use /create <game description> or /help.")
+        return
+    await message.reply_text("Send a text game description or /create <game description>.")
 
 
 async def on_error(update,context):
@@ -205,19 +289,20 @@ async def on_startup(application):
         logger.error("Could not update command menu (%s)",type(error).__name__)
     logger.info("Telegram bot @%s is online",application.bot.username)
     if studio.job and studio.job.data.get("status")=="interrupted":
-        application.bot_data["operation"]=True
         async def resume():
             job=studio.job
             chat_id=job.data.get("chat_id")
             async def notify(text):
-                if chat_id is not None: await application.bot.send_message(chat_id,text[:3900])
+                if chat_id is not None:
+                    for offset in range(0, len(text), 1900):
+                        await application.bot.send_message(chat_id,text[offset:offset + 1900])
             try:
                 artifacts=await studio.approve(notify=notify)
                 if artifacts and chat_id is not None and job.data.get("status") in ("completed","partial"):
                     await deliver(application.bot,chat_id,job)
             finally:
                 application.bot_data.pop("operation",None)
-        application.create_task(resume())
+        application.bot_data["operation"] = application.create_task(resume())
 
 
 async def on_shutdown(application):

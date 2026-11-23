@@ -13,8 +13,9 @@ from pydantic import ValidationError
 from game_examples import REQUESTS, examples
 from studio.agents import GameDesigner, UnityDeveloper, demo_spec
 from studio.assets import ArtDesigner
-from studio.flexible import (FlexibleComponent, FlexibleObject, GameSpecV2, Implementation, load_game_spec,
-                            requirement_report, validate_implementation, validate_prompt_trace)
+from studio.flexible import (FlexibleComponent, FlexibleObject, FlexibleProperty, GameUIPlan, GameSpecV2, Implementation, load_game_spec,
+                            enforce_requested_dimension, explicit_requested_dimension, requirement_report,
+                            validate_implementation, validate_prompt_trace)
 from studio.generation import autowire_named_component_references, build_flexible, save_implementation
 from studio.schemas import ScriptFile, UIPlan
 from studio.state import Job, write_json
@@ -23,6 +24,31 @@ from studio.unity import UnityFailure, UnityRunner
 
 
 class FlexibleContractTests(unittest.TestCase):
+    def test_explicit_prompt_dimension_overrides_planner_drift_and_rejects_wrong_physics(self):
+        self.assertEqual(explicit_requested_dimension("Create a 3D racing game"),"3D")
+        self.assertEqual(explicit_requested_dimension("Make a two-dimensional puzzle game"),"2D")
+        self.assertEqual(explicit_requested_dimension("Not a 2D game; make it 3D"),"3D")
+        self.assertEqual(explicit_requested_dimension("A 2D game with 3D character models"),"2D")
+
+        request,spec,plan=examples("racing")
+        spec.dimension="2D"
+        self.assertEqual(enforce_requested_dimension("Create a 3D racing game",spec),
+            {"requested":"3D","planned":"2D"})
+        self.assertEqual(spec.dimension,"3D")
+        self.assertEqual(enforce_requested_dimension("Create a 2D game",spec),
+            {"requested":"2D","planned":"3D"})
+        self.assertEqual(spec.dimension,"2D")
+        spec.dimension="3D"
+
+        car=next(obj for obj in plan.scenes.scenes[0].objects if obj.id=="car")
+        physics={"Rigidbody","BoxCollider","SphereCollider","CapsuleCollider","MeshCollider","CharacterController",
+            "Rigidbody2D","BoxCollider2D","CircleCollider2D","CapsuleCollider2D","PolygonCollider2D","EdgeCollider2D","CompositeCollider2D"}
+        for obj in plan.scenes.scenes[0].objects:
+            obj.components=[component for component in obj.components if component.type.rsplit(".",1)[-1] not in physics]
+        car.components.append(FlexibleComponent(type="UnityEngine.Rigidbody2D"))
+        with self.assertRaisesRegex(ValueError,"3D game object.*2D physics"):
+            validate_implementation(spec,plan)
+
     def test_three_genres_produce_different_architectures(self):
         signatures=[]
         for genre in REQUESTS:
@@ -176,6 +202,51 @@ class FlexibleContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"multiple UGUI Graphic"):
             validate_implementation(spec,plan)
 
+    def test_preflight_rejects_invalid_transforms_colliders_and_component_references(self):
+        _,spec,plan=examples("racing")
+        car=next(obj for obj in plan.scenes.scenes[0].objects if obj.id=="car")
+        car.scale=(1,0,2)
+        with self.assertRaisesRegex(ValueError,"zero transform scale"):
+            validate_implementation(spec,plan)
+        car.scale=(1,1,2)
+        car.components.append(FlexibleComponent(type="UnityEngine.BoxCollider",properties=[
+            dict(name="size",kind="vector3",value="1,0,1")]))
+        with self.assertRaisesRegex(ValueError,"Collider dimensions must be positive"):
+            validate_implementation(spec,plan)
+        car.components[-1].properties[0].value="1,1,1"
+        camera=next(obj for obj in plan.scenes.scenes[0].objects if obj.id=="camera")
+        camera.components[1].properties[0].value="car:UnityEngine.Camera"
+        with self.assertRaisesRegex(ValueError,"component not declared"):
+            validate_implementation(spec,plan)
+
+    def test_mixed_dimension_scenes_must_explicitly_choose_camera_projection(self):
+        _,spec,plan=examples("puzzle")
+        spec.dimension="mixed"
+        plan.scenes.dimension="mixed"
+        camera=next(obj for obj in plan.scenes.scenes[0].objects if obj.id=="camera")
+        camera.components[0].properties.clear()
+        with self.assertRaisesRegex(ValueError,"must explicitly set its Camera projection"):
+            validate_implementation(spec,plan)
+        camera.components[0].properties.append(FlexibleProperty(name="orthographic",kind="bool",value="true"))
+        validate_implementation(spec,plan)
+
+    def test_screen_ui_rectangles_must_fit_inside_the_canvas_reference_frame(self):
+        _,spec,plan=examples("puzzle")
+        scene=plan.scenes.scenes[0]
+        scene.objects.extend([
+            FlexibleObject.model_validate(dict(id="canvas",name="Canvas",position=[0,0,0],components=[
+                dict(type="Canvas",properties=[dict(name="renderMode",kind="enum",value="ScreenSpaceOverlay")]),
+                dict(type="CanvasScaler",properties=[dict(name="referenceResolution",kind="vector2",value="[800,600]")]),
+            ])),
+            FlexibleObject.model_validate(dict(id="scoreText",name="ScoreText",parent="canvas",position=[-350,220,0],components=[
+                dict(type="Text"),dict(type="UnityEngine.RectTransform",properties=[dict(name="sizeDelta",kind="vector2",value="[300,60]")]),
+            ])),
+        ])
+        with self.assertRaisesRegex(ValueError,"scoreText.*extends beyond"):
+            validate_implementation(spec,plan)
+        scene.objects[-1].position=(-230,220,0)
+        validate_implementation(spec,plan)
+
     def test_claimed_implementation_cannot_pass_without_runtime_evidence(self):
         _,spec,plan=examples("puzzle")
         results=requirement_report(spec,plan)
@@ -206,6 +277,16 @@ class FlexibleContractTests(unittest.TestCase):
             self.assertEqual(json.loads((project/"Assets/Resources/studio_scenes.json").read_text())["dimension"],"3D")
             plan.scripts.scripts[0].content+=" // System.IO.File"
             with self.assertRaises(ValueError):save_implementation(job,project,spec,plan)
+
+    def test_unity_stages_refuse_a_scene_dimension_that_differs_from_project_setup(self):
+        _,spec,plan=examples("racing")
+        with tempfile.TemporaryDirectory() as temp:
+            job=Job.create("dimension mismatch",2,root=Path(temp))
+            project=job.directory/"UnityProject"
+            save_implementation(job,project,spec,plan)
+            write_json(project/"Assets/Resources/studio_dimension.json",{"dimension":"2D"})
+            with self.assertRaisesRegex(UnityFailure,"does not match"):
+                UnityRunner(job,project).validate_dimension()
 
     def test_save_implementation_autowires_named_required_component_references(self):
         request,spec,plan=examples("puzzle")
@@ -252,6 +333,7 @@ class FlexibleWorkflowTests(unittest.IsolatedAsyncioTestCase):
         file=project/"Assets/Studio/Generated/RaceCar.cs"
         file.write_text(file.read_text()+"\n// saved local repair")
         write_json(job.directory/"art_manifest.json",[])
+        write_json(job.directory/"ui_plan.json", {"controls": spec.controls, "screens": [], "layout": [], "accessibility": []})
         job.data["resume_implementation"]=True
         with patch.object(self.studio.agents["art"],"create",AsyncMock()) as art,patch.object(
                 self.studio.agents["developer"],"implement",AsyncMock()) as generate,patch.object(
@@ -304,6 +386,7 @@ class FlexibleWorkflowTests(unittest.IsolatedAsyncioTestCase):
         _,spec,plan=examples("puzzle")
         job=Job.create("test",2,root=self.root);project=job.directory/"UnityProject"
         save_implementation(job,project,spec,plan)
+        write_json(project/"Assets/Resources/studio_dimension.json",{"dimension":spec.dimension})
         runner=UnityRunner(job,project)
         async def fake_run(*args,**kwargs):
             write_json(project/"Artifacts/runtime_checks.json",{"checks":[]})
@@ -326,13 +409,50 @@ class FlexibleWorkflowTests(unittest.IsolatedAsyncioTestCase):
         from studio.flexible import PlanReview
         with patch.object(self.studio.agents["designer"],"plan_ui",AsyncMock(return_value=ui)) as plan_ui,patch.object(self.studio.agents["art"],"create",art),patch.object(self.studio.agents["developer"],"implement",AsyncMock(return_value=plan)) as implement,patch.object(self.studio.agents["qa"],"review_implementation",AsyncMock(return_value=PlanReview())),patch("studio.generation.UnityRunner",return_value=runner),patch("studio.generation.package",return_value=[Path("partial.zip")]):
             await build_flexible(self.studio,service,spec,project,None,False)
-        plan_ui.assert_not_awaited()
-        expected_ui={"ui_requirements":spec.ui_requirements,"controls":spec.controls,"target_platform":spec.target_platform}
+        plan_ui.assert_awaited_once()
+        expected_ui=ui.model_dump()
         self.assertEqual(implement.await_args.args[2],expected_ui)
         self.assertEqual(json.loads((job.directory/"ui_plan.json").read_text()),expected_ui)
         self.assertEqual(job.data["status"],"partial")
         report=json.loads((job.directory/"validation_report.json").read_text())
         self.assertEqual(report["requirements"][0]["verification_result"],"manual_review_required")
+        self.assertEqual(report["dimension"],spec.dimension)
+
+    async def test_actionable_qa_concerns_trigger_bounded_repair_and_fresh_review(self):
+        request,spec,plan=examples("racing")
+        job=Job.create(request,2,root=self.root);self.studio.job=job
+        job.data["tasks"]=[dict(role=r,name=n,dependencies=d,status="pending") for r,n,d in TASKS]
+        project=job.directory/"UnityProject";service=SimpleNamespace(job=job)
+        repaired=plan.model_copy(deep=True)
+        repaired.scripts.scripts[0].content += "\n// QA repair"
+        ui=GameUIPlan(controls=spec.controls)
+        from studio.flexible import PlanReview
+        review=AsyncMock(side_effect=[PlanReview(concerns=["A scene object is missing its intended collision shape."]),
+                                      PlanReview()])
+        async def art(*args):
+            write_json(job.directory/"art_manifest.json",[])
+            return {}
+        async def tests(mode):
+            if mode=="PlayMode":
+                write_json(project/"Artifacts/runtime_checks.json",{"checks":[dict(id="drive_to_finish",passed=True)]})
+            return {"status":"passed"}
+        runner=SimpleNamespace(compile=AsyncMock(return_value={"status":"passed"}),
+            assemble=AsyncMock(return_value={"success":True}),tests=tests)
+        with patch.object(self.studio.agents["designer"],"plan_ui",AsyncMock(return_value=ui)),patch.object(
+                self.studio.agents["art"],"create",art),patch.object(
+                self.studio.agents["developer"],"implement",AsyncMock(return_value=plan)),patch.object(
+                self.studio.agents["qa"],"review_implementation",review),patch.object(
+                self.studio.agents["qa"],"repair_implementation",AsyncMock(return_value=repaired)) as repair,patch(
+                "studio.generation.UnityRunner",return_value=runner),patch(
+                "studio.generation.package",return_value=[Path("completed.zip")]):
+            await build_flexible(self.studio,service,spec,project,None,False)
+        repair.assert_awaited_once()
+        self.assertEqual(review.await_count,2)
+        self.assertEqual(job.data["repairs"],1)
+        report=json.loads((job.directory/"validation_report.json").read_text())
+        self.assertEqual(report["qa_review"]["concerns"],[])
+        self.assertNotIn("A scene object is missing its intended collision shape.",report["limitations"])
+        self.assertEqual(report["model_quality"]["status"],"insufficient_evidence")
 
 
 if __name__=="__main__":unittest.main()

@@ -1,10 +1,13 @@
 """Existing frameworks use the same metered gateway; neither owns an API key."""
 import asyncio
 import json
+import threading
 
 
 async def crewai_json(service, role, system, value, max_tokens):
     loop=asyncio.get_running_loop()
+    cancelled=threading.Event()
+    futures=[]
 
     def execute():
         from crewai import Agent, Crew, Task
@@ -14,10 +17,13 @@ async def crewai_json(service, role, system, value, max_tokens):
         class MeteredLLM(BaseLLM):
             _calls: int = PrivateAttr(default=0)
             def call(self,messages,tools=None,callbacks=None,available_functions=None,**kwargs):
+                if cancelled.is_set(): raise RuntimeError("Studio planning was cancelled")
                 self._calls+=1
                 if self._calls>2: raise RuntimeError("CrewAI specialist call limit reached")
                 future=asyncio.run_coroutine_threadsafe(service.json(role,system,
                     {"shared_specification":value,"agent_context":messages},max_tokens),loop)
+                futures.append(future)
+                if cancelled.is_set(): future.cancel()
                 try:
                     return "Final Answer: "+json.dumps(future.result(timeout=400))
                 except BaseException:
@@ -35,7 +41,12 @@ async def crewai_json(service, role, system, value, max_tokens):
         if raw.strip().startswith("```"): raw=raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return json.loads(raw)
 
-    return await asyncio.to_thread(execute)
+    try:
+        return await asyncio.to_thread(execute)
+    except asyncio.CancelledError:
+        cancelled.set()
+        for future in futures: future.cancel()
+        raise
 
 
 async def autogen_json(service,role,system,value,max_tokens):

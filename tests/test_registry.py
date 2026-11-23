@@ -13,6 +13,10 @@ def model(mid, prompt="0", completion="0", **extra):
 
 
 class RegistryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        settings = patch.dict(os.environ, {"AI_PROVIDER": "openrouter", "STUDIO_FREE_ONLY": "0", "STUDIO_MODEL_SELECTION": "configured"})
+        settings.start(); self.addCleanup(settings.stop)
+
     async def test_rejected_key_stops_discovery_before_any_model_requests(self):
         calls=[]
         original=httpx.AsyncClient

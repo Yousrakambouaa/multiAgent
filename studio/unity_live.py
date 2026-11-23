@@ -10,6 +10,23 @@ from studio.state import write_json
 from studio.unity import UnityFailure, compiler_errors, unity_failure_owner
 
 
+async def require_editor_idle(resource, stage, deadline):
+    """Wait out Unity's Play Mode transition; never stop an active game automatically."""
+    transition_deadline = min(deadline, time.monotonic() + 30)
+    state = await resource("mcpforunity://editor/state")
+    editor = state.get("editor") or {}
+    play_mode = editor.get("play_mode") or {}
+    while play_mode.get("is_changing") and time.monotonic() < transition_deadline:
+        await asyncio.sleep(.25)
+        state = await resource("mcpforunity://editor/state")
+        editor = state.get("editor") or {}
+        play_mode = editor.get("play_mode") or {}
+    if play_mode.get("is_changing"):
+        raise UnityFailure(stage, "Unity Play Mode transition did not finish within 30 seconds", "infrastructure")
+    if play_mode.get("is_playing"):
+        raise UnityFailure(stage, "Stop Play mode before running studio stages", "infrastructure")
+
+
 async def run_live(runner, stage, extra, timeout):
     client = UnityMCPClient.from_environment()
     if client is None:
@@ -50,11 +67,7 @@ async def run_live(runner, stage, extra, timeout):
     try:
         await client.connect()
         await wait_for_project(client, runner.project, timeout=min(90, timeout), check_cancelled=runner.job.check_cancelled)
-        state = await resource("mcpforunity://editor/state")
-        editor = state.get("editor") or {}
-        play_mode = editor.get("play_mode") or {}
-        if play_mode.get("is_playing") or play_mode.get("is_changing"):
-            raise UnityFailure(stage, "Stop Play mode before running studio stages", "infrastructure")
+        await require_editor_idle(resource, stage, deadline)
         if stage == "compile":
             evidence_path = runner.project / "Artifacts/compilation.json"
             evidence_path.unlink(missing_ok=True)
@@ -128,6 +141,25 @@ async def run_live(runner, stage, extra, timeout):
             path.parent.mkdir(parents=True, exist_ok=True)
             ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
             return "Live MCP test job completed; results require validation"
+        if stage == "android":
+            evidence_path = runner.project / "Artifacts/android.json"
+            apk_path = runner.project / "Artifacts/prototype.apk"
+            evidence_path.unlink(missing_ok=True)
+            apk_path.unlink(missing_ok=True)
+            await call("developer", "execute_menu_item", {"menu_path": "Studio/Build Android APK"})
+            while time.monotonic() < deadline:
+                if evidence_path.is_file():
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    if evidence.get("success") and apk_path.is_file() and apk_path.stat().st_size >= 10000:
+                        import zipfile
+                        with zipfile.ZipFile(apk_path) as archive:
+                            if "AndroidManifest.xml" not in archive.namelist() or archive.testzip() is not None:
+                                raise UnityFailure(stage, "APK integrity validation failed", "infrastructure")
+                        return {"status": "passed", "path": str(apk_path), "device_test": "unverified"}
+                    if evidence.get("error"):
+                        raise UnityFailure(stage, evidence["error"], "infrastructure")
+                await asyncio.sleep(1)
+            raise UnityFailure(stage, "Live Editor Android build timed out without verified APK evidence", "infrastructure")
         raise UnityFailure(stage, "This stage is not supported in Live Editor mode; no batch process was launched", "infrastructure")
     except MCPError as error:
         raise UnityFailure(stage, str(error), "infrastructure") from error

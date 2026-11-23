@@ -1,0 +1,49 @@
+{
+  "assets": [
+    {
+      "id": "sky_background",
+      "kind": "sprite",
+      "path": "Assets/Studio/Art/sky_background.png",
+      "width": 1920,
+      "height": 1080,
+      "pixels_per_unit": 100,
+      "source": "OpenRouter image generation",
+      "model": "recraft/recraft-v4.1-flash-v2:free",
+      "prompt": "2D game production asset. Flat 2D primitives with a static sky image background and solid green ground. Consistent palette: #FFFFFF, #87CEEB, #228B22, #FFD700, #000000. 2D sky background image with some clouds, flat illustration style, suitable for a 2D game background. Single asset, no text, no watermark, no sprite sheet, no collage. Wide seamless atmospheric backdrop with quiet lower foreground.",
+      "slicing": "single sprite; no sheet slicing assumed",
+      "cache_hit": false,
+      "status": "ready",
+      "requirement_ids": [
+        "R1"
+      ]
+    },
+    {
+      "id": "ground_texture",
+      "kind": "sprite",
+      "path": "Assets/Studio/Art/ground_texture.png",
+      "width": 512,
+      "height": 128,
+      "pixels_per_unit": 128,
+      "source": "OpenRouter image generation",
+      "model": "recraft/recraft-v4.1-flash-v2:free",
+      "prompt": "2D game production asset. Flat 2D primitives with a static sky image background and solid green ground. Consistent palette: #FFFFFF, #87CEEB, #228B22, #FFD700, #000000. Solid green ground texture for a 2D platformer ground. Single asset, no text, no watermark, no sprite sheet, no collage. Wide seamless atmospheric backdrop with quiet lower foreground.",
+      "slicing": "single sprite; no sheet slicing assumed",
+      "cache_hit": false,
+      "status": "ready",
+      "requirement_ids": [
+        "R2"
+      ]
+    },
+    {
+      "id": "player_square",
+      "kind": "sprite",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R3"
+      ]
+    }
+  ]
+}

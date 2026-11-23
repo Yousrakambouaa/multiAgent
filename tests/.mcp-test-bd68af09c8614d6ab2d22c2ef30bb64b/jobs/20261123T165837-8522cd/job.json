@@ -1,0 +1,15 @@
+{
+  "id": "20261123T165837-8522cd",
+  "request": "test",
+  "chat_id": null,
+  "status": "planning",
+  "stage": "validation",
+  "created_at": "2026-11-23T16:58:37.057784+00:00",
+  "updated_at": "2026-11-23T16:58:37.057784+00:00",
+  "cap_usd": 1,
+  "costs": [],
+  "tasks": [],
+  "artifacts": [],
+  "cancel_requested": false,
+  "repairs": 0
+}

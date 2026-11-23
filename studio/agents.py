@@ -50,7 +50,8 @@ class GameDesigner:
         elif backend!="direct": raise ValueError("Unknown designer backend")
         result = await caller("designer",
             "You are the Game Designer. Interpret this user's game independently as GameSpec v2. "
-            "Any genre, 2D/3D/mixed, perspective and Unity target is allowed. Do not assume platformer, coins, "
+            "Any genre, 2D/3D/mixed, perspective and Unity target is allowed. Preserve an explicit 2D or 3D "
+            "request exactly; never select the opposite dimension. Do not assume platformer, coins, "
             "jumping, Android, landscape, a player character, or a menu/results structure. "
             "Keep every explicit instruction; each requirement quotes an EXACT substring of the request. "
             "Split compound instructions into separate R IDs, including visual style, controls and target. "
@@ -65,14 +66,37 @@ class GameDesigner:
             "Return exactly the provided schema, not implementation code.",
             {"request": request, "schema": GameSpecV2.model_json_schema(),
              "cap_usd": service.job.data["cap_usd"],
+             "provider_capabilities": service.registry.capability_summary() if hasattr(service, "registry") else {},
              "asset_library": available_library()}, 6500)
-        spec = GameSpecV2.model_validate(result)
-        validate_prompt_trace(spec, request)
-        return spec
+        for attempt in range(2):
+            try:
+                spec = GameSpecV2.model_validate(result)
+                validate_prompt_trace(spec, request)
+                return spec
+            except ValueError as error:
+                if hasattr(service, "record_contract_failure"):
+                    service.record_contract_failure("designer")
+                if attempt == 1:
+                    raise
+                result = await caller("designer",
+                    "Correct the complete GameSpec v2 using the reported validation errors. Preserve the user's "
+                    "game and every requirement. original_instruction must quote an exact substring of the request. "
+                    "Keep task dependencies acyclic and include every requirement in a task. Return only the schema.",
+                    {"request": request, "schema": GameSpecV2.model_json_schema(),
+                     "previous_response": result, "validation_errors": str(error),
+                     "cap_usd": service.job.data["cap_usd"]}, 6500)
 
 
     async def plan_ui(self, service, spec):
         """Plan UI as a Game Designer task using the existing UI model profile."""
+        if getattr(spec, "version", 1) == 2:
+            from studio.flexible import GameUIPlan
+            return GameUIPlan.model_validate(await service.json("ui",
+                "Plan usable UI and control feedback for this exact game. Preserve the requested target and controls. "
+                "Do not inject touch buttons, menus or HUDs unless the specification needs them. Describe screen "
+                "layouts, hierarchy, anchors, readable sizes, input events, transitions and accessibility. "
+                "Use the supplied schema; implementation belongs to the Developer.",
+                {"game_spec": spec.model_dump(), "schema": GameUIPlan.model_json_schema()}, 2200))
         runtime = ("Describe only UI requested by this game's specification. UI must be implemented by the developer; "
                    "no menu, HUD or touch controls are supplied automatically."
                    if getattr(spec, "version", 1) == 2 else
@@ -102,6 +126,8 @@ class UnityDeveloper:
                 normalized = normalize_implementation_response(result, spec)
                 return validate_implementation(spec, Implementation.model_validate(normalized))
             except ValueError as error:
+                if hasattr(service, "record_contract_failure"):
+                    service.record_contract_failure("developer")
                 diagnostics = str(error)
                 if directory is not None:
                     write_json(directory / f"implementation_diagnostics_{attempt + 1}.json",
@@ -139,6 +165,16 @@ class UnityDeveloper:
 
     async def repair_scenes(self,service,spec,scenes,error_report):
         from studio.schemas import SceneBundle
+        if getattr(spec, "version", 1) == 2:
+            from studio.flexible import SceneBundleV2
+            return SceneBundleV2.model_validate(await service.json("scene",
+                "Repair only the scene bundle from actual Unity diagnostics. Preserve scene names, object IDs, "
+                "dimension, controls, required assets and gameplay. Correct components, property types, references, "
+                "camera, physics and UI layout. Scene object positions are WORLD coordinates even for parented objects; "
+                "the builder preserves world position while parenting, so compute world coordinates from parent plus intended local offset. "
+                "No script or test changes. Return the full scene bundle schema.",
+                {"game_spec": spec.model_dump(), "scene_spec": scenes.model_dump(),
+                 "diagnostics": error_report[-14000:], "schema": SceneBundleV2.model_json_schema()}, 11000))
         result=await service.json("scene",
             "You are the Unity Developer. Repair the provided SceneBundle using actual Unity assembly diagnostics. "
             "Preserve GameSpec, scene identifiers, asset paths and gameplay. Use only component types "
@@ -206,18 +242,33 @@ class QADebugger:
                 return await autogen_json(service, role, system, value, max_tokens)
         elif backend != "direct":
             raise ValueError("Unknown QA backend")
-        result = await caller("qa", FLEXIBLE_DEVELOPER_PROMPT +
-            " You are QA & Debugger. Repair the implementation using actual diagnostics. "
-            "Compare every original prompt instruction with GameSpec and the implementation. "
-            "Preserve requirements and probe IDs. Fix the implementation, never weaken assertions to conceal failure.",
-            {"original_request": service.job.data["request"], "game_spec": spec.model_dump(),
-             "implementation": plan.model_dump(), "diagnostics": diagnostics,
-             "schema": Implementation.model_json_schema()}, 16000)
-        normalized = normalize_implementation_response(result, spec)
-        repaired = validate_implementation(spec, Implementation.model_validate(normalized))
-        if [p.model_dump() for p in repaired.probes] != [p.model_dump() for p in plan.probes]:
-            raise ValueError("QA repairs must preserve behavioral probes; review a changed test plan separately")
-        return repaired
+        original_probes = [probe.model_dump() for probe in plan.probes]
+        rejection = ""
+        for attempt in range(3):
+            result = await caller("qa", FLEXIBLE_DEVELOPER_PROMPT +
+                " You are QA & Debugger. Repair the implementation using actual diagnostics. "
+                "Compare every original prompt instruction with GameSpec and the implementation. "
+                "Return the ORIGINAL behavioral probes byte-for-byte unchanged: do not add, remove, reorder, "
+                "or edit any probe step or assertion. Fix implementation files and scene data only; never "
+                "weaken assertions to conceal failure.",
+                {"original_request": service.job.data.get("effective_request", service.job.data["request"]),
+                 "game_spec": spec.model_dump(),
+                 "implementation": plan.model_dump(), "diagnostics": diagnostics,
+                 "previous_contract_error": rejection,
+                 "required_probe_ids_and_contract": original_probes,
+                 "schema": Implementation.model_json_schema()}, 16000)
+            normalized = normalize_implementation_response(result, spec)
+            repaired = validate_implementation(spec, Implementation.model_validate(normalized))
+            if [p.model_dump() for p in repaired.probes] != original_probes:
+                rejection = "The previous answer changed behavioral probes. Restore the required probes exactly and repair only code/scenes."
+            elif repaired.model_dump() == plan.model_dump():
+                rejection = "The previous answer made no implementation changes. Apply a concrete code or scene repair for the diagnostics."
+            else:
+                return repaired
+            if attempt == 2 or not hasattr(service, "record_contract_failure"):
+                raise ValueError("QA repair contract failed after bounded model retries: " + rejection)
+            service.record_contract_failure("qa")
+        raise ValueError("QA repair contract failed after bounded model retries")
 
     async def repair(self, service, spec, error_report, scripts, runtime_contract):
         backend=os.environ.get("STUDIO_QA_BACKEND","autogen")
@@ -250,6 +301,8 @@ def available_library():
 FLEXIBLE_DEVELOPER_PROMPT = """You are the Unity Developer implementing the original prompt in Unity 6.
 Return an Implementation with scripts:{scripts:[{filename,content}]}, scenes:{version:2,title,dimension,orientation,scenes:[...],materials:[...]}, and behavioral probes.
 Do not replace requested mechanics, genre, dimension, camera, controls or art. List unfinished R IDs in limitations.
+Scene object positions are WORLD coordinates even when parent is set; the scene builder preserves world position while parenting.
+For a child anchor, set its world position to the parent's world position plus the intended local offset.
 Generate standalone public MonoBehaviour classes with file names matching class names, no namespaces.
 Use UnityEngine and UnityEngine.InputSystem (Keyboard.current/Mouse.current), not the legacy Input API.
 Guard Keyboard.current/Mouse.current for null on mobile. Rigidbody2D uses linearVelocity in Unity 6.
@@ -258,6 +311,9 @@ Any script that reads Rigidbody/Rigidbody2D or a Collider in Awake/Start must de
 components on the same scene object. A 2D physics object must not carry a 3D Rigidbody or Collider.
 Unity's Cube primitive includes a 3D BoxCollider; when using it for 2D physics, rely on the scene
 builder to remove that implicit 3D collider and declare the needed 2D colliders explicitly.
+For grounding and overlap checks, exclude the acting object's own Collider2D/Rigidbody2D colliders even
+when the layer mask is broad; prefer an intentional ground layer mask and a GroundCheck Transform parented
+to its moving actor. Runtime probes must test ground contact after a fall and movement in the requested direction.
 UnityEngine.UI.Button exposes onClick, NOT onPointerUp/onPointerDown/onPointerExit/onPointerCancel events.
 For held touch controls use IPointerDownHandler/IPointerUpHandler/IPointerExitHandler and ICancelHandler
 on a MonoBehaviour attached to the button (OnCancel, not OnPointerCancel), or EventTrigger entries.

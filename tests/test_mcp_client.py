@@ -113,6 +113,13 @@ class UnityMCPClientTests(unittest.IsolatedAsyncioTestCase):
     def test_empty_editor_registry_during_startup_is_retryable(self):
         self.assertTrue(mcp.transient_editor_error(
             mcp.MCPError("No Unity instances are currently connected. Start Unity and press 'Start Session'.")))
+        self.assertTrue(mcp.transient_editor_error(mcp.MCPError(
+            "Unity MCP tool get_test_job failed: Unity instance 'UnityProject@old' not found. "
+            "Available instances: ['UnityProject@new']")))
+        self.assertFalse(mcp.transient_editor_error(mcp.MCPError(
+            "Connected Unity Editor does not match this job's UnityProject")))
+        self.assertTrue(mcp.transient_editor_error(mcp.MCPError(
+            "Unity project selection is changing; target project remains available")))
 
     async def asyncSetUp(self):
         self.temp = Path(__file__).resolve().parent / (".mcp-test-" + uuid4().hex)

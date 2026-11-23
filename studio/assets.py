@@ -128,6 +128,9 @@ async def create_flexible_art(designer, service, spec, project):
     """
     images = [a for a in spec.required_assets if a.workflow == "image"]
     manifest = []
+    if images and hasattr(service, "registry") and not list(service.registry.candidates("art")):
+        provider = getattr(getattr(service.registry, "provider", None), "label", "Selected provider")
+        service.job.event("art", "image_generation_unavailable", reason=f"{provider} has no compatible image-generation endpoint")
     if images:
         adapter = SimpleNamespace(required_assets=images, art_style=spec.art_style, palette=spec.palette)
         await designer.create(service, adapter, project, strict=True)

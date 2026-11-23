@@ -60,6 +60,9 @@ def unity_failure_owner(stage, output):
     if errors:
         return "developer" if all(e["file"].startswith("Assets/Studio/Generated/") for e in errors) else "infrastructure"
     owner = "scene" if stage == "assembly" else "qa" if stage in ("EditMode", "PlayMode") else "developer"
+    if stage == "PlayMode" and any(marker in output.casefold() for marker in
+            ("probe_ground_collision", "probe_player_exists", "missing object", "missing component")):
+        owner = "scene"
     # Recoverable license-client noise must not suppress scene/runtime repairs.
     if licensing_status(output)["status"] == "available":
         output = "\n".join(line for line in output.splitlines() if "Licensing" not in line)
@@ -114,7 +117,7 @@ async def ensure_live_editor(job, project, timeout=None):
     if not project.is_dir():
         raise UnityFailure("project_setup", f"Unity project folder does not exist: {project}", "infrastructure")
     try:
-        configured_timeout = float(os.environ.get("STUDIO_UNITY_STARTUP_TIMEOUT", "240"))
+        configured_timeout = float(os.environ.get("STUDIO_UNITY_STARTUP_TIMEOUT", "600"))
         requested_timeout = float(timeout) if timeout is not None else configured_timeout
     except (TypeError, ValueError) as error:
         raise UnityFailure("project_setup", "STUDIO_UNITY_STARTUP_TIMEOUT must be a number of seconds", "infrastructure") from error
@@ -136,6 +139,7 @@ async def ensure_live_editor(job, project, timeout=None):
         command = [str(UNITY), "-projectPath", str(project), "-logFile", str(editor_log)]
         environment = os.environ.copy()
         environment.pop("OPENROUTER_API_KEY", None)
+        environment.pop("DAHL_API_KEY", None)
         environment.pop("TELEGRAM_BOT_TOKEN", None)
         job.event("supervisor", "unity_editor_opening", project=str(project), log=str(editor_log))
         try:
@@ -186,7 +190,9 @@ def available_space(path):
     return shutil.disk_usage(path).free
 
 
-def bootstrap(job):
+def bootstrap(job, dimension="2D"):
+    if dimension not in ("2D", "3D", "mixed"):
+        raise UnityFailure("project_setup", f"Unsupported game dimension: {dimension!r}", "infrastructure")
     if available_space(job.directory) < 1_500_000_000:
         raise UnityFailure("project_setup","At least 1.5 GB free disk space is required for a new Unity project", "infrastructure")
     project = job.directory / "UnityProject"
@@ -196,7 +202,24 @@ def bootstrap(job):
             shutil.copytree(ROOT / "generated_game" / name, project / name)
         settings = ROOT / "generated_game" / "Assets" / "Settings"
         if settings.exists():
-            shutil.copytree(settings, project / "Assets" / "Settings")
+            settings_target = project / "Assets" / "Settings"
+            settings_target.mkdir(parents=True, exist_ok=True)
+            # The starter project is a 2D URP template. Do not seed 3D/mixed
+            # projects with its 2D renderer and scene templates; v2 scenes use
+            # the built-in renderer unless their own data selects otherwise.
+            two_d_only = {"renderer2d.asset", "universalrp.asset", "lit2dscenetemplate.scenetemplate",
+                          "urp2dscenetemplate.unity"}
+            for source in settings.rglob("*"):
+                if not source.is_file():
+                    continue
+                relative = source.relative_to(settings)
+                source_name = source.name.removesuffix(".meta").casefold()
+                if dimension != "2D" and (source_name in two_d_only
+                        or any(part.casefold() == "scenes" for part in relative.parts)):
+                    continue
+                target = settings_target / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
             meta = settings.with_suffix(".meta")
             if meta.exists():
                 shutil.copy2(meta, project / "Assets" / meta.name)
@@ -212,8 +235,23 @@ def bootstrap(job):
     from studio.mcp_setup import prepare_mcp_project
     prepare_mcp_project(project)
     (project / "Assets" / "Resources").mkdir(parents=True, exist_ok=True)
-    (project / "Assets" / "Studio" / "Generated").mkdir(exist_ok=True)
-    job.event("developer", "project_initialized", project=str(project.relative_to(ROOT)))
+    dimension_file = project / "Assets" / "Resources" / "studio_dimension.json"
+    if dimension_file.is_file():
+        try:
+            existing_dimension = json.loads(dimension_file.read_text(encoding="utf-8")).get("dimension")
+        except (OSError, ValueError):
+            raise UnityFailure("project_setup", "The saved Unity project dimension marker is invalid", "infrastructure")
+        if existing_dimension != dimension:
+            raise UnityFailure("project_setup", "Saved Unity project dimension does not match the approved game specification", "infrastructure")
+    write_json(dimension_file, {"dimension": dimension})
+    write_json(project / "ProjectSettings" / "StudioGameProject.json",
+               {"dimension": dimension, "rendering": "built-in"})
+    (project / "Assets" / "Studio" / "Generated").mkdir(parents=True, exist_ok=True)
+    try:
+        project_label = project.relative_to(ROOT)
+    except ValueError:
+        project_label = project
+    job.event("developer", "project_initialized", project=str(project_label))
     return project
 
 
@@ -254,6 +292,23 @@ class UnityRunner:
         path = self.project / "Assets/Resources/studio_scenes.json"
         return path.is_file() and json.loads(path.read_text(encoding="utf-8")).get("version") == 2
 
+    def validate_dimension(self):
+        if not self.flexible():
+            return
+        try:
+            bundle = json.loads((self.project / "Assets/Resources/studio_scenes.json").read_text(encoding="utf-8"))
+            marker = json.loads((self.project / "Assets/Resources/studio_dimension.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise UnityFailure("dimension_validation", "Could not read the saved Unity game dimension marker and scene specification.",
+                               "infrastructure") from error
+        if bundle.get("dimension") != marker.get("dimension"):
+            raise UnityFailure("dimension_validation",
+                "Saved scene dimension does not match the Unity project dimension selected before generation.", "scene")
+        dimension = marker.get("dimension")
+        if dimension not in ("2D", "3D", "mixed"):
+            raise UnityFailure("dimension_validation", "Saved Unity game dimension is unsupported.", "infrastructure")
+        return dimension
+
     async def run(self, stage, extra, timeout=600, graphics=False):
         mode = os.environ.get("STUDIO_UNITY_MODE", "auto").lower()
         opened = project_is_open(self.project)
@@ -277,6 +332,8 @@ class UnityRunner:
             command.append("-nographics")
         command.extend(extra)
         process = await asyncio.create_subprocess_exec(*command, cwd=self.project,
+            env={k: v for k, v in os.environ.items() if k not in
+                 ("OPENROUTER_API_KEY", "DAHL_API_KEY", "TELEGRAM_BOT_TOKEN")},
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         deadline = time.monotonic() + timeout
         try:
@@ -317,11 +374,14 @@ class UnityRunner:
     async def assemble(self):
         path = safe_path(self.project, "Artifacts/assembly.json")
         path.unlink(missing_ok=True)
+        expected_dimension = self.validate_dimension()
         await self.run("assembly", ["-quit", "-executeMethod",
             "UniversalSceneBuilder.Assemble" if self.flexible() else "StudioSceneBuilder.Assemble"])
         if not path.is_file():
             raise UnityFailure("assembly", "Unity exited without writing assembly evidence", "scene")
         report = json.loads(path.read_text(encoding="utf-8"))
+        if expected_dimension and report.get("dimension") != expected_dimension:
+            raise UnityFailure("assembly", "Unity assembly evidence reports a different game dimension", "scene")
         minimum = len(json.loads((self.project / "Assets/Resources/studio_scenes.json").read_text(encoding="utf-8"))["scenes"]) if self.flexible() else 3
         count = report.get("scenes", 0)
         if not report.get("success") or (count != minimum if self.flexible() else count < minimum):
@@ -360,6 +420,7 @@ class UnityRunner:
         return report
 
     async def tests(self, mode):
+        self.validate_dimension()
         path = safe_path(self.project, "Artifacts/" + mode + ".xml")
         path.unlink(missing_ok=True)
         flexible = self.flexible()
@@ -387,6 +448,7 @@ class UnityRunner:
         return result
 
     async def android(self):
+        self.validate_dimension()
         if available_space(self.project) < 5_000_000_000:
             raise UnityFailure("android","Android build needs at least 5 GB free disk space for native intermediates", "infrastructure")
         path = safe_path(self.project, "Artifacts/android.json")

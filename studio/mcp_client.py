@@ -70,7 +70,9 @@ def transient_editor_error(error):
     return any(marker in text for marker in (
         "no unity editor instances found", "no unity instance found", "no unity instances are currently connected",
         "no unity editor instances are connected", "connection refused",
-        "connection lost", "connection reset", "domain reload", "editor is busy", "editor is reloading"))
+        "connection lost", "connection reset", "domain reload", "editor is busy", "editor is reloading",
+        "unity project selection is changing; target project remains available")) or (
+        "unity instance" in text and "not found" in text and "available instances" in text)
 
 
 async def wait_for_project(client, project, timeout=90, check_cancelled=None):
@@ -218,7 +220,7 @@ class UnityMCPClient:
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 cwd=ROOT, limit=2**20,
                 env={k: v for k, v in os.environ.items() if k not in
-                     ("OPENROUTER_API_KEY", "TELEGRAM_BOT_TOKEN")})
+                     ("OPENROUTER_API_KEY", "DAHL_API_KEY", "TELEGRAM_BOT_TOKEN")})
             self._stderr_task = asyncio.create_task(self._drain_stderr())
             init = await self._request("initialize", {
                 "protocolVersion": PROTOCOL_VERSION,
@@ -372,7 +374,29 @@ class UnityMCPClient:
         info = await self.read_resource("mcpforunity://project/info")
         root = info.get("projectRoot") or info.get("project_root")
         if not root or Path(root).resolve() != expected:
-            raise MCPError("Connected Unity Editor does not match this job's UnityProject")
+            # A second Editor can change the bridge's global selection between
+            # the instance check and project.info. Re-select only when the
+            # exact requested project is still uniquely registered, then verify
+            # the context again before any agent tool is allowed to run.
+            if "set_active_instance" in self.tools:
+                listing = await self.read_resource("mcpforunity://instances")
+                instances = listing.get("instances")
+                matches = [item for item in instances or [] if isinstance(item, dict)
+                    and item.get("path") and _mcp_instance_project_root(item["path"]) == expected]
+                if len(matches) == 1 and matches[0].get("id"):
+                    instance_id = matches[0]["id"]
+                    selected = await self._request("tools/call", {"name": "set_active_instance",
+                        "arguments": {"instance": instance_id}})
+                    _check_tool_error(selected, "set_active_instance")
+                    self._active_instance_id = instance_id
+                    info = await self.read_resource("mcpforunity://project/info")
+                    root = info.get("projectRoot") or info.get("project_root")
+                    if not root or Path(root).resolve() != expected:
+                        raise MCPError("Unity project selection is changing; target project remains available")
+                else:
+                    raise MCPError("Connected Unity Editor does not match this job's UnityProject")
+            else:
+                raise MCPError("Connected Unity Editor does not match this job's UnityProject")
         version = str(info.get("unityVersion") or info.get("unity_version") or "")
         try:
             major, minor = (int(part) for part in version.split(".", 2)[:2])

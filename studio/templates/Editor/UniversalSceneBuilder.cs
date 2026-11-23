@@ -16,6 +16,7 @@ public static class UniversalSceneBuilder {
         public int version; public string title, dimension, orientation;
         public SceneData[] scenes; public MaterialData[] materials;
     }
+    [Serializable] public class ProjectDimension { public string dimension; }
     [Serializable] public class SceneData { public string name, kind, background_color; public ObjectData[] objects; }
     [Serializable] public class ObjectData {
         public string id, name, role, parent, tag, sprite, color, primitive, model, material;
@@ -29,7 +30,7 @@ public static class UniversalSceneBuilder {
     [Serializable] public class ArtInfo { public ArtEntry[] assets; }
     [Serializable] public class ArtEntry { public string path, kind, status; public int pixels_per_unit; }
     [Serializable] public class Evidence {
-        public bool success; public string stage = "assembly", error;
+        public bool success; public string stage = "assembly", error, dimension;
         public int scenes, objects, references, prefabs; public string[] scene_paths;
     }
 
@@ -113,6 +114,43 @@ public static class UniversalSceneBuilder {
         if (type == typeof(Vector2)) { var v=Numbers(value); return new Vector2(v[0],v[1]); }
         return Convert.ChangeType(value,type,CultureInfo.InvariantCulture);
     }
+    static object ConvertPropertyValue(PropertyData data, Type type, Dictionary<string,GameObject> map) {
+        switch(data.kind) {
+            case "float":
+                if(type!=typeof(float) && type!=typeof(double)) throw new Exception("Expected a floating-point property");
+                return ConvertValue(data.value,type);
+            case "int":
+                if(type!=typeof(int) && type!=typeof(long)) throw new Exception("Expected an integer property");
+                return ConvertValue(data.value,type);
+            case "bool":
+                if(type!=typeof(bool)) throw new Exception("Expected a boolean property");
+                return ConvertValue(data.value,type);
+            case "string":
+                if(type!=typeof(string)) throw new Exception("Expected a string property");
+                return data.value;
+            case "enum":
+                if(!type.IsEnum) throw new Exception("Expected an enum property");
+                return ConvertValue(data.value,type);
+            case "color":
+                if(type!=typeof(Color)) throw new Exception("Expected a Color property");
+                return ColorValue(data.value);
+            case "vector2":
+                if(type!=typeof(Vector2)) throw new Exception("Expected a Vector2 property");
+                return ConvertValue(data.value,type);
+            case "vector3":
+                if(type!=typeof(Vector3)) throw new Exception("Expected a Vector3 property");
+                return ConvertValue(data.value,type);
+            case "reference":
+            case "asset":
+                if(!typeof(UnityEngine.Object).IsAssignableFrom(type))
+                    throw new Exception("Expected a Unity object reference");
+                var target=Reference(data,map,type);
+                if(target!=null && !type.IsInstanceOfType(target))
+                    throw new Exception("Reference is not assignable to "+type.Name);
+                return target;
+            default: throw new Exception("Unknown property kind "+data.kind);
+        }
+    }
     static UnityEngine.Object Reference(PropertyData data, Dictionary<string,GameObject> map, Type expectedType) {
         if (data.kind == "asset") {
             if (!data.value.StartsWith("Assets/") || data.value.Contains("..")) throw new Exception("Unsafe asset path");
@@ -142,12 +180,23 @@ public static class UniversalSceneBuilder {
         var property = target.GetType().GetProperty(data.name,BindingFlags.Public|BindingFlags.Instance);
         if (field != null || (property != null && property.CanWrite)) {
             var type = field != null ? field.FieldType : property.PropertyType;
-            object value = reference ? Reference(data,map,type) : ConvertValue(data.value,type);
+            object value = ConvertPropertyValue(data,type,map);
             if (field != null) field.SetValue(target,value); else property.SetValue(target,value);
         } else {
             var serialized = new SerializedObject(target);
             var prop = serialized.FindProperty(data.name);
             if (prop == null) throw new Exception("Missing property " + target.GetType().Name + "." + data.name);
+            var expected = data.kind=="float" ? SerializedPropertyType.Float :
+                data.kind=="int" ? SerializedPropertyType.Integer :
+                data.kind=="bool" ? SerializedPropertyType.Boolean :
+                data.kind=="string" ? SerializedPropertyType.String :
+                data.kind=="color" ? SerializedPropertyType.Color :
+                data.kind=="vector2" ? SerializedPropertyType.Vector2 :
+                data.kind=="vector3" ? SerializedPropertyType.Vector3 :
+                data.kind=="reference" || data.kind=="asset" ? SerializedPropertyType.ObjectReference :
+                data.kind=="enum" ? SerializedPropertyType.Enum : SerializedPropertyType.Generic;
+            if(prop.propertyType!=expected)
+                throw new Exception("Property kind "+data.kind+" does not match "+target.GetType().Name+"."+data.name);
             switch(data.kind) {
                 case "float": prop.floatValue=float.Parse(data.value,CultureInfo.InvariantCulture); break;
                 case "int": prop.intValue=int.Parse(data.value,CultureInfo.InvariantCulture); break;
@@ -166,6 +215,128 @@ public static class UniversalSceneBuilder {
         }
         if (reference) evidence.references++;
         EditorUtility.SetDirty(target);
+    }
+    static bool Finite(float value) { return !float.IsNaN(value) && !float.IsInfinity(value); }
+    static void RequirePositiveNumbers(string value, int count, string context) {
+        var values=Numbers(value);
+        if(values.Length!=count || values.Any(v=>!Finite(v)||v<=0))
+            throw new Exception("Invalid positive collider dimensions for "+context);
+    }
+    static void ValidateColliderProperties(ObjectData obj) {
+        foreach(var component in obj.components ?? Array.Empty<ComponentData>()) {
+            string type=Resolve(component.type).Name;
+            foreach(var property in component.properties ?? Array.Empty<PropertyData>()) {
+                if(property.name=="size" && (type=="BoxCollider2D" || type=="CapsuleCollider2D"))
+                    RequirePositiveNumbers(property.value,2,obj.id+":"+type+".size");
+                if(property.name=="size" && (type=="BoxCollider" || type=="CapsuleCollider"))
+                    RequirePositiveNumbers(property.value,3,obj.id+":"+type+".size");
+                if(property.name=="radius" && (type=="CircleCollider2D" || type=="SphereCollider"))
+                    RequirePositiveNumbers(property.value,1,obj.id+":"+type+".radius");
+                if((property.name=="radius" || property.name=="height") && type=="CapsuleCollider")
+                    RequirePositiveNumbers(property.value,1,obj.id+":"+type+"."+property.name);
+            }
+        }
+    }
+    static void ValidateColliderBounds(GameObject go, string objectId) {
+        foreach(var collider in go.GetComponents<Collider2D>()) {
+            if(collider is BoxCollider2D box && (box.size.x<=0 || box.size.y<=0))
+                throw new Exception("Invalid BoxCollider2D dimensions on "+objectId);
+            if(collider is CircleCollider2D circle && circle.radius<=0)
+                throw new Exception("Invalid CircleCollider2D radius on "+objectId);
+            if(collider is CapsuleCollider2D capsule && (capsule.size.x<=0 || capsule.size.y<=0))
+                throw new Exception("Invalid CapsuleCollider2D dimensions on "+objectId);
+            if(collider is EdgeCollider2D edge && (edge.points==null || edge.points.Length<2))
+                throw new Exception("EdgeCollider2D needs at least two points on "+objectId);
+            if(collider is PolygonCollider2D polygon && (polygon.points==null || polygon.points.Length<3))
+                throw new Exception("PolygonCollider2D needs at least three points on "+objectId);
+        }
+        foreach(var collider in go.GetComponents<Collider>()) {
+            if(collider is BoxCollider box && (box.size.x<=0 || box.size.y<=0 || box.size.z<=0))
+                throw new Exception("Invalid BoxCollider dimensions on "+objectId);
+            if(collider is SphereCollider sphere && sphere.radius<=0)
+                throw new Exception("Invalid SphereCollider radius on "+objectId);
+            if(collider is CapsuleCollider capsule && (capsule.radius<=0 || capsule.height<=0))
+                throw new Exception("Invalid CapsuleCollider dimensions on "+objectId);
+        }
+    }
+    public static void ValidateBundle(Bundle bundle) {
+        if(bundle==null || bundle.version!=2 || bundle.scenes==null || bundle.scenes.Length==0)
+            throw new Exception("Invalid v2 scene specification");
+        if(bundle.dimension!="2D" && bundle.dimension!="3D" && bundle.dimension!="mixed")
+            throw new Exception("Unsupported scene dimension: "+bundle.dimension);
+        var materialIds=new HashSet<string>((bundle.materials ?? Array.Empty<MaterialData>()).Select(m=>m.id));
+        if(materialIds.Count!=(bundle.materials ?? Array.Empty<MaterialData>()).Length)
+            throw new Exception("Duplicate material IDs");
+        foreach(var scene in bundle.scenes) {
+            var source=scene.objects ?? Array.Empty<ObjectData>();
+            if(source.Select(o=>o.id).Distinct().Count()!=source.Length || source.Select(o=>o.name).Distinct().Count()!=source.Length)
+                throw new Exception("Scene "+scene.name+" has duplicate object IDs or names");
+            var byId=source.ToDictionary(o=>o.id,o=>o);
+            if(!source.Any(o=>(o.components ?? Array.Empty<ComponentData>()).Any(c=>Resolve(c.type)==typeof(Camera))))
+                throw new Exception("Scene "+scene.name+" must explicitly declare a Camera");
+            foreach(var obj in source) {
+                if(obj.position==null || obj.position.Length!=3 || obj.scale==null || obj.scale.Length!=3
+                    || obj.rotation==null || obj.rotation.Length!=3
+                    || obj.position.Concat(obj.scale).Concat(obj.rotation).Any(v=>!Finite(v))
+                    || obj.scale.Any(v=>Mathf.Abs(v)<.000001f))
+                    throw new Exception("Object "+obj.id+" has an invalid transform");
+                if(obj.layer<0 || obj.layer>31) throw new Exception("Object "+obj.id+" has an invalid layer");
+                var seenParents=new HashSet<string>{obj.id}; var parent=obj.parent;
+                while(!string.IsNullOrEmpty(parent)) {
+                    if(!byId.ContainsKey(parent) || !seenParents.Add(parent))
+                        throw new Exception("Object "+obj.id+" has a missing or cyclic parent "+parent);
+                    parent=byId[parent].parent;
+                }
+                if(!string.IsNullOrEmpty(obj.material) && !materialIds.Contains(obj.material))
+                    throw new Exception("Object "+obj.id+" references missing material "+obj.material);
+                var componentTypes=(obj.components ?? Array.Empty<ComponentData>()).Select(c=>Resolve(c.type)).ToArray();
+                ValidateColliderProperties(obj);
+                if(componentTypes.Distinct().Count()!=componentTypes.Length)
+                    throw new Exception("Object "+obj.id+" declares the same component more than once");
+                bool has2D=componentTypes.Any(t=>typeof(Rigidbody2D).IsAssignableFrom(t)||typeof(Collider2D).IsAssignableFrom(t));
+                bool has3D=componentTypes.Any(t=>typeof(Rigidbody).IsAssignableFrom(t)||typeof(Collider).IsAssignableFrom(t));
+                if(has2D && has3D) throw new Exception("Object "+obj.id+" mixes 2D and 3D physics components");
+                if(bundle.dimension=="2D" && has3D) throw new Exception("2D project object "+obj.id+" declares 3D physics");
+                if(bundle.dimension=="3D" && has2D) throw new Exception("3D project object "+obj.id+" declares 2D physics");
+                bool hasCameraProjection=(obj.components ?? Array.Empty<ComponentData>())
+                    .Where(c=>Resolve(c.type)==typeof(Camera))
+                    .SelectMany(c=>c.properties ?? Array.Empty<PropertyData>()).Any(p=>p.name=="orthographic");
+                if(bundle.dimension=="mixed" && componentTypes.Contains(typeof(Camera)) && !hasCameraProjection)
+                    throw new Exception("Mixed-dimension scene "+scene.name+" must explicitly set each Camera projection");
+            }
+        }
+        foreach(var scene in bundle.scenes) {
+            var temporary=new List<GameObject>();
+            try {
+                var map=new Dictionary<string,GameObject>();
+                foreach(var obj in scene.objects) {
+                    var components=obj.components ?? Array.Empty<ComponentData>();
+                    var rect=components.Any(c=>Resolve(c.type)==typeof(RectTransform));
+                    var go=rect ? new GameObject(obj.name,typeof(RectTransform)) : new GameObject(obj.name);
+                    go.SetActive(false); temporary.Add(go); map.Add(obj.id,go);
+                    foreach(var component in components) RequireComponent(go,component.type,obj.id);
+                }
+                foreach(var obj in scene.objects) {
+                    var go=map[obj.id];
+                    foreach(var data in obj.components ?? Array.Empty<ComponentData>()) {
+                        var target=go.GetComponent(Resolve(data.type));
+                        var propertyNames=new HashSet<string>();
+                        foreach(var property in data.properties ?? Array.Empty<PropertyData>()) {
+                            if(!propertyNames.Add(property.name))
+                                throw new Exception("Duplicate property "+property.name+" on "+obj.id+":"+data.type);
+                            try { SetProperty(target,property,map,new Evidence()); }
+                            catch(Exception error) {
+                                throw new Exception("Invalid "+scene.name+"/"+obj.id+"/"+data.type+"."+property.name+": "
+                                    +error.GetBaseException().Message,error);
+                            }
+                        }
+                    }
+                    ValidateColliderBounds(go,obj.id);
+                }
+            } finally {
+                foreach(var go in temporary) if(go!=null) UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
     }
     static void ImportArt() {
         var art=JsonUtility.FromJson<ArtInfo>(File.ReadAllText("Assets/Resources/studio_art.json"));
@@ -217,6 +388,15 @@ public static class UniversalSceneBuilder {
         try {
             var bundle=JsonUtility.FromJson<Bundle>(File.ReadAllText("Assets/Resources/studio_scenes.json"));
             if(bundle==null || bundle.version!=2 || bundle.scenes==null || bundle.scenes.Length==0) throw new Exception("Invalid v2 scene specification");
+            evidence.dimension=bundle.dimension;
+            if(bundle.dimension!="2D" && bundle.dimension!="3D" && bundle.dimension!="mixed")
+                throw new Exception("Unsupported scene dimension: "+bundle.dimension);
+            string dimensionPath="Assets/Resources/studio_dimension.json";
+            if(File.Exists(dimensionPath)) {
+                var projectDimension=JsonUtility.FromJson<ProjectDimension>(File.ReadAllText(dimensionPath));
+                if(projectDimension==null || projectDimension.dimension!=bundle.dimension)
+                    throw new Exception("Scene dimension does not match the Unity project dimension selected before Editor startup.");
+            }
             // The base project uses a 2D-only URP renderer. New v2 projects use
             // built-in rendering for both 2D sprites and 3D lit materials.
             GraphicsSettings.defaultRenderPipeline=null;
@@ -225,6 +405,7 @@ public static class UniversalSceneBuilder {
             QualitySettings.SetQualityLevel(previous,false);
             Directory.CreateDirectory("Assets/Studio/Art"); Directory.CreateDirectory("Assets/Studio/Scenes"); Directory.CreateDirectory("Assets/Studio/Prefabs");
             Tags(bundle); ImportArt(); var materials=Materials(bundle); var paths=new List<string>();
+            ValidateBundle(bundle);
             foreach(var scene in bundle.scenes) {
                 EditorSceneManager.NewScene(NewSceneSetup.EmptyScene,NewSceneMode.Single);
                 var map=new Dictionary<string,GameObject>();
@@ -237,6 +418,7 @@ public static class UniversalSceneBuilder {
                     } else if(!string.IsNullOrEmpty(obj.primitive)) go=GameObject.CreatePrimitive((PrimitiveType)Enum.Parse(typeof(PrimitiveType),obj.primitive));
                     else if(obj.components.Any(c=>c.type=="UnityEngine.RectTransform")) go=new GameObject(obj.name,typeof(RectTransform));
                     else go=new GameObject(obj.name);
+                    go.SetActive(false);
                     go.name=obj.name; go.layer=obj.layer; go.tag=obj.tag;
                     go.transform.position=Vec(obj.position,Vector3.zero); go.transform.localScale=Vec(obj.scale,Vector3.one);
                     go.transform.eulerAngles=Vec(obj.rotation,Vector3.zero);
@@ -260,7 +442,11 @@ public static class UniversalSceneBuilder {
                     foreach(var comp in obj.components) RequireComponent(go,comp.type,obj.id);
                     if (UsesPhysics2D(obj) && (go.GetComponent<Rigidbody>() != null || go.GetComponent<Collider>() != null))
                         throw new Exception("Object '"+obj.name+"' combines 2D and 3D physics components.");
-                    if(go.TryGetComponent<MeshCollider>(out var collider) && go.TryGetComponent<MeshFilter>(out var filter)) collider.sharedMesh=filter.sharedMesh;
+                    if(go.TryGetComponent<MeshCollider>(out var collider)) {
+                        var filter=go.GetComponent<MeshFilter>() ?? go.GetComponentInChildren<MeshFilter>();
+                        if(filter!=null) collider.sharedMesh=filter.sharedMesh;
+                        if(collider.sharedMesh==null) throw new Exception("MeshCollider needs a mesh or model asset on "+obj.id);
+                    }
                     if(!string.IsNullOrEmpty(obj.material)) {
                         if(!materials.TryGetValue(obj.material,out var material)) throw new Exception("Missing material " + obj.material);
                         foreach(var renderer in go.GetComponentsInChildren<Renderer>()) renderer.sharedMaterial=material;
@@ -278,18 +464,23 @@ public static class UniversalSceneBuilder {
                             rect.localScale=Vec(obj.scale,Vector3.one); rect.localEulerAngles=Vec(obj.rotation,Vector3.zero);
                         } else go.transform.SetParent(parent,true);
                     }
-                    foreach(var comp in obj.components) foreach(var prop in comp.properties) {
+                    foreach(var comp in obj.components) {
                         var target=RequireComponent(go,comp.type,obj.id);
-                        try { SetProperty(target,prop,map,evidence); }
-                        catch(Exception error) { throw new Exception("Failed to set "+Resolve(comp.type).Name+"."+prop.name+" on object '"+obj.name+"' (id '"+obj.id+"'): "+error.GetBaseException().Message,error); }
+                        if(target is Camera generatedCamera && !comp.properties.Any(prop=>prop.name=="orthographic"))
+                            generatedCamera.orthographic=bundle.dimension=="2D";
+                        foreach(var prop in comp.properties) {
+                            try { SetProperty(target,prop,map,evidence); }
+                            catch(Exception error) { throw new Exception("Failed to set "+Resolve(comp.type).Name+"."+prop.name+" on object '"+obj.name+"' (id '"+obj.id+"'): "+error.GetBaseException().Message,error); }
+                        }
                     }
                     EnsureVisibleUI(go,obj);
                     if(go.TryGetComponent<Camera>(out var camera)) {
                         camera.clearFlags=CameraClearFlags.SolidColor;
                         camera.backgroundColor=ColorValue(scene.background_color);
                     }
-                    go.SetActive(obj.active);
                 }
+                // Wire every object before enabling scripts and their lifecycle.
+                foreach(var obj in scene.objects) map[obj.id].SetActive(obj.active);
                 foreach(var obj in scene.objects.Where(o=>o.prefab)) {
                     PrefabUtility.SaveAsPrefabAsset(map[obj.id],"Assets/Studio/Prefabs/"+scene.name+"_"+obj.id+".prefab"); evidence.prefabs++;
                 }
@@ -308,6 +499,8 @@ public static class UniversalSceneBuilder {
         if(!evidence.success && Application.isBatchMode) EditorApplication.Exit(1);
     }
     static void EnsureVisibleUI(GameObject go,ObjectData obj) {
+        var text=go.GetComponent<UnityEngine.UI.Text>();
+        if(text!=null && text.font==null) text.font=Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         var image=go.GetComponent<UnityEngine.UI.Image>();
         if(image!=null && image.sprite==null) {
             // A newly added UGUI Image has no source sprite and draws no mesh.

@@ -5,15 +5,16 @@ from studio.agents import GameDesigner, QADebugger, UnityDeveloper, demo_spec
 from studio.api import ModelService
 from studio.artifacts import package
 from studio.assets import ArtDesigner
-from studio.config import BUILD_ANDROID, DEFAULT_CAP, JOBS
+from studio.config import BUILD_ANDROID, DEFAULT_CAP, JOBS, safe_path
 from studio.costs import BudgetExceeded, Ledger
 from studio.registry import Registry
 from studio.request_validation import NOISE
 from studio.schemas import GameSpec, UIPlan
-from studio.flexible import load_game_spec, requirement_report
+from studio.flexible import enforce_requested_dimension, load_game_spec, requirement_report
 from studio.state import Job, JobCancelled, ProcessLock, write_json
 from studio.unity import (RUNTIME_CONTRACT, UnityFailure, UnityRunner, bootstrap,
     ensure_live_editor, project_is_open, save_scripts, uses_live_editor, validate_files)
+from studio.failures import failure_report
 
 TASKS = [
     ("designer", "game_spec", []), ("developer", "scripts", ["game_spec"]),
@@ -42,12 +43,18 @@ class Supervisor:
         self.job = None
         marker = self.root / "current.txt"
         if marker.exists():
-            path = self.root / marker.read_text().strip() / "job.json"
+            path = safe_path(self.root, marker.read_text().strip()) / "job.json"
             if path.exists():
                 self.job = Job.load(path)
                 if self.job.data["status"] in ("planning", "building"):
-                    self.job.data["status"] = "interrupted"
-                    self.job.data["error"] = "Process stopped before completion. The saved job will resume when the bot starts."
+                    if self.job.data.get("cancel_requested"):
+                        self.job.data["status"] = "cancelled"
+                    elif self.job.data["status"] == "planning" and not (path.parent / "game_spec.json").is_file():
+                        self.job.data["status"] = "failed"
+                        self.job.data["error"] = "Planning was interrupted before a plan was saved. Send /create to start a new request."
+                    else:
+                        self.job.data["status"] = "interrupted"
+                        self.job.data["error"] = "Process stopped before completion. The saved job will resume when the bot starts."
                     self.job.save()
         self.lock = asyncio.Lock()
 
@@ -60,7 +67,7 @@ class Supervisor:
                     self.job.event("delivery", "notification_failed", error=type(error).__name__)
 
     def busy(self):
-        return self.lock.locked() or (self.job is not None and self.job.data["status"] in ("planning", "building", "awaiting_approval"))
+        return self.lock.locked() or (self.job is not None and self.job.data["status"] in ("planning", "building", "awaiting_approval", "interrupted"))
 
     def add_instruction(self, instruction):
         """Attach a user update to the active job without replacing its original prompt."""
@@ -93,6 +100,7 @@ class Supervisor:
         async with self.lock:
             job = Job.create(request.strip(), DEFAULT_CAP, chat_id, self.root)
             self.job = job
+            job.data["android_build_required"] = bool(android)
             (self.root / "current.txt").write_text(job.data["id"], encoding="utf-8")
             job.data["tasks"] = [dict(role=role, name=name, dependencies=deps, status="pending") for role,name,deps in TASKS]
             job.data["additional_instructions"] = [dict(text=value.strip(), status="planning")
@@ -120,7 +128,7 @@ class Supervisor:
                         job.data["error"] = "I only create Unity games. Use /create <game description>."
                         job.save()
                         return job
-                await self.notify(notify, "Designer: preparing a game plan within the $2 job cap.")
+                await self.notify(notify, f"Designer: preparing a game plan within the ${job.data['cap_usd']:g} job cap.")
                 spec = demo_spec() if demo else None
                 if not demo:
                     # Incorporate messages received while planning, retrying only
@@ -131,6 +139,10 @@ class Supervisor:
                                    if item.get("status") == "planning"]
                         additions = [item["text"] for item in pending]
                         effective_request = request.strip()
+                        if android:
+                            effective_request += ("\n\nAdditional build output requirement: also produce a verified Android APK. "
+                                "Preserve the user's requested primary platform and design any needed Android touch controls "
+                                "alongside its existing controls. Do not replace or reinterpret the original game request.")
                         if additions:
                             effective_request += "\n\nAdditional user instructions (preserve the original request too):\n" + "\n".join("- " + item for item in additions)
                         job.data["effective_request"] = effective_request
@@ -149,6 +161,12 @@ class Supervisor:
                                 item["status"] = "queued"
                         job.save()
                 job.check_cancelled()
+                dimension_adjustment = enforce_requested_dimension(
+                    job.data.get("effective_request", request.strip()), spec)
+                if dimension_adjustment:
+                    job.event("designer", "explicit_dimension_enforced", **dimension_adjustment)
+                if getattr(spec, "version", 1) == 2:
+                    job.data["game_dimension"] = spec.dimension
                 # Some providers still populate the legacy clarification field.
                 # Missing details use planner defaults; this field never blocks a run.
                 if getattr(spec, "version", 1) == 2:
@@ -156,13 +174,21 @@ class Supervisor:
                 write_json(job.directory / "game_spec.json", spec.model_dump())
                 if spec.version == 2:
                     write_json(job.directory / "requirements.json", requirement_report(spec))
+                    from studio.coordination import share_game
+                    share_game(job, spec, self.registry.provider.name)
                 job.data["status"] = "awaiting_approval"
                 job.data["tasks"][0]["status"] = "passed"
                 job.event("designer", "plan_ready", name=spec.name)
                 await self.notify(notify, self.plan_text() + "\n\nSend /approve to start Unity generation, /cancel to discard this plan, or /budget to inspect spending.")
+            except asyncio.CancelledError:
+                self.fail(job, JobCancelled("Planning cancelled"))
+                await self.notify(notify, "Planning cancelled. You can start a new game with /create.")
             except Exception as error:
                 self.fail(job,error)
-                await self.notify(notify, f"Planning stopped: {job.data['error']}")
+                summary = job.data.get("failure_report", {})
+                await self.notify(notify, f"Planning stopped ({summary.get('type', 'generation workflow')}): "
+                    f"{summary.get('root_cause', 'The plan could not be generated.') } "
+                    f"{summary.get('needed', 'Check the saved job and retry.')}")
         return job
 
     def plan_text(self):
@@ -197,19 +223,32 @@ class Supervisor:
     def fail(self, job, error):
         status = "cancelled" if isinstance(error,JobCancelled) or job.data.get("cancel_requested") else "budget_stopped" if isinstance(error,BudgetExceeded) else "failed"
         job.data["status"] = status
+        for entry in job.data.get("costs", []):
+            if entry.get("status") == "pending":
+                entry["status"] = "failed_or_unknown_charge"
         # Errors generated by our bounded services do not include credentials.
         message = str(error) if isinstance(error,(UnityFailure,BudgetExceeded,JobCancelled,ValueError,RuntimeError)) else type(error).__name__
         job.data["error"] = message[:14000]
+        failure_report(error, job)
         job.event("supervisor", status, error=message[:14000])
 
-    async def approve(self, notify=None, android=BUILD_ANDROID):
+    async def approve(self, notify=None, android=None):
         job = self.job
+        previous_status = job.data.get("status") if job else None
+        if android is None:
+            android = bool(job.data.get("android_build_required", BUILD_ANDROID)) if job else BUILD_ANDROID
         if self.lock.locked():
             raise RuntimeError("A studio operation is already running")
         if job and job.data.get("status") == "failed" and (job.directory / "game_spec.json").is_file():
             # A failed build can be retried from its saved specification without
             # charging for planning again. Jobs that failed before saving a spec
             # (for example a malformed planner response) remain non-resumable.
+            job.check_cancelled()
+            previous_repairs = int(job.data.get("repairs", 0))
+            if previous_repairs:
+                job.data.setdefault("repair_history", []).append({"type": "prior_attempt_summary",
+                    "repairs": previous_repairs, "error": job.data.get("error", "")[:1000]})
+            job.data["repairs"] = 0
             job.data["status"] = "awaiting_approval"
             job.data["error"] = ""
             job.save()
@@ -246,9 +285,17 @@ class Supervisor:
                                     job.data["effective_request"]=effective_request
                             else:
                                 break
+                        dimension_request = job.data.get("effective_request", job.data["request"])
+                        dimension_adjustment = enforce_requested_dimension(dimension_request, spec)
+                        if dimension_adjustment:
+                            job.event("designer", "explicit_dimension_enforced", **dimension_adjustment)
+                            job.data["resume_implementation"] = False
+                        job.data["game_dimension"] = spec.dimension
                         spec.clarification_questions=[]
                         write_json(job.directory/"game_spec.json",spec.model_dump())
                         write_json(job.directory/"requirements.json",requirement_report(spec))
+                        from studio.coordination import share_game
+                        share_game(job, spec, self.registry.provider.name)
                     else:
                         for item in job.data.get("additional_instructions",[]):
                             if item.get("status")=="pending_approval": item["status"]="queued"
@@ -262,7 +309,7 @@ class Supervisor:
                     if mode == "batch" and opened_before:
                         raise UnityFailure("project_setup", "Batch mode cannot run against an open Unity project", "infrastructure")
                     use_live_editor = uses_live_editor(mode, opened_before)
-                    project=await asyncio.to_thread(bootstrap,job)
+                    project=await asyncio.to_thread(bootstrap,job,spec.dimension if spec.version == 2 else "2D")
                     if use_live_editor:
                         if not project_is_open(project):
                             await self.notify(notify, "Opening this approved game project in the Unity Editor and connecting its MCP bridge.")
@@ -333,10 +380,7 @@ class Supervisor:
                     report["android"]={"status":"not_requested","device_test":"unverified"}
                     if android:
                         await self.notify(notify,"Android: attempting a development APK build.")
-                        try:
-                            report["android"]=await runner.android()
-                        except UnityFailure as error:
-                            report["android"]={"status":"failed","error":str(error),"device_test":"unverified"}
+                        report["android"]=await runner.android()
                     queued = [item["text"] for item in job.data.get("additional_instructions", []) if item.get("status") == "queued"]
                     if queued:
                         report["queued_instructions"] = queued
@@ -352,6 +396,19 @@ class Supervisor:
                     await self.notify(notify,f"Prototype verified. Project: {project}\nEditMode and PlayMode results are attached to /result.\n"+Ledger(job).summary()+"\nUse /result for the project, report and preview."+update_notice)
                     return artifacts
             except Exception as error:
+                if isinstance(error, RuntimeError) and str(error).startswith("Another studio process holds .unity.lock"):
+                    # A second controller can see the same saved job. Do not
+                    # overwrite its in-flight status or call it a failed build.
+                    job.data["status"] = previous_status or "interrupted"
+                    job.data["error"] = "Another Studio process is using the Unity project; saved progress was preserved."
+                    job.event("supervisor", "run_deferred", reason="unity_lock_busy")
+                    await self.notify(notify, "Another Studio process is already using this Unity project. "
+                        "This saved job was preserved; check /status after that run finishes.")
+                    return []
                 self.fail(job,error)
-                await self.notify(notify,f"Job {job.data['status']}: {job.data['error'][:1800]}\n"+Ledger(job).summary())
+                summary = job.data.get("failure_report", {})
+                await self.notify(notify, f"Job {job.data['status']}: {summary.get('type', 'generation workflow')}. "
+                    f"{summary.get('root_cause', 'The job could not complete.') } "
+                    f"Repairs attempted: {summary.get('repairs_attempted', 0)}. "
+                    f"{summary.get('needed', 'Review saved diagnostics and retry.')}\n"+Ledger(job).summary())
                 return []

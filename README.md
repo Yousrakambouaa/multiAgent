@@ -4,7 +4,7 @@ A persistent, budgeted supervisor turns an approved `/create <description>` plan
 
 ## Launch
 
-From `C:\Users\new\Desktop\multiAgent`:
+From `C:\Users\new\Desktop\studio`:
 
 ```powershell
 .\.venv\Scripts\python.exe telegram_bot.py
@@ -12,7 +12,7 @@ From `C:\Users\new\Desktop\multiAgent`:
 
 Keep one controller running. An OS lock prevents two new bot/CLI controllers from running together; Telegram polling conflicts also stop the duplicate. Stop an older bot before launching the new version.
 
-The existing `.env` supplies `TELEGRAM_BOT_TOKEN`, numeric `TELEGRAM_ALLOWED_USER_ID`, and `OPENROUTER_API_KEY`. See `.env.example` for optional configuration. No existing credential is replaced. A fresh environment can install `requirements.txt`.
+The existing `.env` supplies `TELEGRAM_BOT_TOKEN`, numeric `TELEGRAM_ALLOWED_USER_ID`, and the selected provider's API key. OpenRouter is the default. See `.env.example` for optional configuration. No existing credential is replaced. A fresh environment can install `requirements.txt`.
 
 ## Unity projects in GitHub
 
@@ -58,7 +58,7 @@ CLI `--android` enables the Android development build. For Telegram, set `STUDIO
 
 ## Unity MCP
 
-With the default `STUDIO_UNITY_MODE=auto` and MCP enabled, approving a job opens that exact project in a visible interactive Unity Editor before implementation starts. If it is already open, Studio reuses it. The five existing agents and the live QA pipeline operate through that Editor's MCP bridge, and the assembled scenes remain open for inspection. Studio does not launch another Editor for the same project and does not silently fall back to batch mode if the bridge fails. `STUDIO_UNITY_STARTUP_TIMEOUT` bounds Editor and bridge startup (240 seconds by default). Set `STUDIO_UNITY_MCP_ENABLED=0` to opt out; in `auto`, closed projects then use the existing batch path. `live` always requires the matching MCP-connected Editor, while `batch` requires the project to be closed. New job projects receive MCP in their package manifest and a project-local startup hook. The bridge uses Studio's Python interpreter, avoiding the default Python 3.15 that caused the reported PyYAML/MSVC failure. Existing open projects need one asset refresh after MCP is installed so Unity imports the startup hook. The current configured Unity version is Unity 6.
+With the default `STUDIO_UNITY_MODE=auto` and MCP enabled, approving a job opens that exact project in a visible interactive Unity Editor before implementation starts. If it is already open, Studio reuses it. The five existing agents and the live QA pipeline operate through that Editor's MCP bridge, and the assembled scenes remain open for inspection. Studio does not launch another Editor for the same project and does not silently fall back to batch mode if the bridge fails. `STUDIO_UNITY_STARTUP_TIMEOUT` bounds Editor and bridge startup (600 seconds by default). Set `STUDIO_UNITY_MCP_ENABLED=0` to opt out; in `auto`, closed projects then use the existing batch path. `live` always requires the matching MCP-connected Editor, while `batch` requires the project to be closed. New job projects receive MCP in their package manifest and a project-local startup hook. The bridge uses Studio's Python interpreter, avoiding the default Python 3.15 that caused the reported PyYAML/MSVC failure. Existing open projects need one asset refresh after MCP is installed so Unity imports the startup hook. The current configured Unity version is Unity 6.
 
 The connector starts the matching Python server over stdio with this command (it is launched automatically by the app; do not start a second copy):
 
@@ -98,6 +98,8 @@ When MCP is enabled (the default) and the bridge connects, the five existing age
 
 Both modes use the existing deterministic scene assemblers and checked evidence. Live mode invokes only the two allowlisted Studio assembly menu entries through the Developer facade; arbitrary menus remain blocked. Each tool call rechecks the connected project. Live compilation imports all assets, requests compilation and requires fresh, completed `Artifacts/compilation.json` evidence from trusted Editor callbacks; historical console errors cannot pass or fail a new compile. Live tests use QA's `run_tests`/`get_test_job`, retain the actual per-test results and apply the existing NUnit and runtime-probe checks. Live failures never fall back to a conflicting batch process. `mcp-smoke` remains the explicit temporary scene-creation check. Setup is injected into generated job projects only; the base `generated_game` project is unchanged.
 
+Version 2 projects persist their selected dimension from planning through project bootstrap, scene validation, assembly evidence, testing and Android builds. Before creating scenes, the Editor preflight resolves every component and property against Unity's actual types, checks typed references and transform/hierarchy data, and rejects invalid collider geometry or mixed physics. QA review findings now enter the bounded repair budget; repaired code/scenes are recompiled, reassembled and rerun through EditMode and PlayMode rather than allowing findings to be ignored.
+
 Generated C# compiler diagnostics are parsed and deduplicated before failure routing. Recoverable LicensingClient warnings cannot override generated-code errors; `unity_licensing.json` separately records entitlement recovery or required Hub sign-in/license activation. QA reads the current generated files from disk and returns complete replacement files using its configured backend and metered gateway. Repairs preserve scenes, probes and requirements, reject unchanged/advice-only output, persist actual source changes and recompile, with at most three compiler repairs. See `compiler_repairs.json` and job events for evidence. Retrying a saved implementation resumes its locally repaired scripts and art instead of regenerating them; approved changes to the request invalidate that reuse.
 
 ## Architecture
@@ -106,8 +108,9 @@ Generated C# compiler diagnostics are parsed and deduplicated before failure rou
 | --- | --- |
 | `telegram_bot.py` | Authorization, commands, background operations, progress and artifact delivery |
 | `studio/supervisor.py` | Task graph, plan approval, persistent state, specialist handoffs, bounded repair loop |
+| `studio/coordination.py` | Shared game context, dependency gates, evidence-linked task completion and repair invalidation |
 | `studio/schemas.py`, `studio/flexible.py` | Version 1 platformer compatibility and version 2 genre-neutral GameSpec, assets, tasks, scene/component contracts, probes, trace and evidence |
-| `studio/registry.py`, `studio_models.json` | Live model availability/capability/pricing lookup; explicit primary/fallback allowlists |
+| `studio/registry.py`, `studio/model_selection.py`, `studio_models.json` | Provider-scoped catalog cache, capability filtering, observed task evidence, model preferences and paid-model policy |
 | `studio/api.py`, `studio/costs.py` | Shared OpenRouter gateway, pre-call reservations, reported charges, conservative unknown-charge estimates |
 | `studio/agents.py`, `studio/frameworks.py` | Game Designer, Unity Developer and QA/Debugger; metered CrewAI and AutoGen adapters |
 | `studio/assets.py` | Real Image API calls, PNG validation/resizing, alpha checks, cache, provenance and original procedural fallback |
@@ -131,7 +134,7 @@ The studio has exactly five agent identities, registered in `Supervisor.agents`:
 4. **Art Designer** generates sprites, textures, backgrounds and other visual assets.
 5. **QA & Debugger** handles validation findings, compiler/runtime diagnostics and code repairs.
 
-UI Designer and Scene Architect are no longer separate agents. The existing `ui` and `scene` keys in `studio_models.json` remain model task profiles owned by Game Designer and Unity Developer respectively; their model IDs, fallbacks and request limits are unchanged. `AGENT_MODEL_PROFILES` documents this ownership. Compilation, scene building, testing, packaging and APK building remain deterministic tools. The existing `service.json`/`service.post` boundary remains available for a future provider adapter; no new external API is integrated.
+UI Designer and Scene Architect are no longer separate agents. The existing `ui` and `scene` keys in `studio_models.json` remain model task profiles owned by Game Designer and Unity Developer respectively; their OpenRouter model IDs, fallbacks and request limits are unchanged. `AGENT_MODEL_PROFILES` documents this ownership. Compilation, scene building, testing, packaging and APK building remain deterministic tools. Both AI providers use the existing `service.json`/`service.post` boundary.
 
 Default planning uses CrewAI with a custom metered LLM. Default QA repair uses AutoGen with a custom metered model client. They cannot access API credentials or bypass the shared ledger. `STUDIO_DESIGNER_BACKEND=direct` and `STUDIO_QA_BACKEND=direct` select the simpler structured handoff implementation. There are no free-form specialist conversations or unrestricted shell tools.
 
@@ -143,9 +146,15 @@ Each job lives in `jobs/<id>/`, including a self-contained `UnityProject`, speci
 
 `STUDIO_JOB_BUDGET_USD` defaults to 2. Every paid attempt reserves a conservative maximum before it starts. Text reservations overcount input using UTF-8 bytes, include maximum output, use the highest published context-tier rates, and constrain OpenRouter provider pricing. Image reservations use verified endpoint billing units, pinned providers and a bounded output resolution. A call that will not fit is refused; no subsequent paid request starts over the cap. Actual provider `usage.cost` replaces the reservation when supplied; missing costs and uncertain failures remain **estimates/reservations**, never exact charges. A provider reporting a cost above its advertised reservation stops the job immediately.
 
-Preferred model IDs and fallbacks are configured in `studio_models.json`. Before planning/building, the app checks the active OpenRouter key without making a completion, then discovers models using the key's filtered `/models/user` catalog. Run `main.py models` to inspect eligible choices and pricing. After configured text models, up to three compatible models are considered in price order, within the existing price ceilings and job cap. Set `STUDIO_AUTO_MODEL_FALLBACK=0` to restrict selection to configured IDs. Image models retain their separate configured endpoint list. Unknown/unavailable, unexpectedly expensive or incompatible models are excluded; stale catalog data never authorizes paid calls.
+`STUDIO_MODEL_SELECTION=dynamic` is the default. The selected provider's live catalog supplies eligible models; model names are never treated as coding-quality scores. Selection ranks actual Unity task outcomes, structured-output reliability, provider availability, declared reasoning support, usable context, and cost. Unmeasured models have neutral evidence rather than invented benchmark results. Capabilities distinguish text output, vision input, image output, tools, and reasoning; Dahl's omitted context/tool/reasoning metadata stays unknown. Each request records its model, provider, capabilities and rates in job events. Outcomes are cached per provider URL and key fingerprint, so another account or provider cannot inherit them.
 
-After editing `OPENROUTER_API_KEY` in `.env`, restart the bot. A variable already set in the launching environment takes precedence over `.env`. Keys must belong to OpenRouter; keys from another API provider need a separate provider integration. A `401 / User not found` is a rejected credential and cannot be fixed by changing models. A key's displayed spending limit is not account credit: account credits, key limits, model access, and the local $2 job cap are separate. Credit-rejected text calls may fall back to an eligible `:free` model, which still has provider rate limits. No paid generation can bypass the local cap.
+Version 2 validation reports summarize job-scoped API, contract and Unity outcomes separately. A paid-model recommendation is emitted only after at least three measured Unity outcomes for both a free baseline and a paid candidate show a meaningful pass-rate advantage; API failures alone are not treated as evidence of weak model quality.
+
+OpenRouter discovery validates the active inference key, reads its filtered `/models/user` catalog, and discovers image endpoints from `/images/models` with verified billing units. Catalogs expire after five minutes; OpenRouter still checks the key on cache hits. Dynamic selection considers at most four compatible models and does not use paid OpenRouter models unless `STUDIO_ALLOW_PAID_MODELS=1`. `STUDIO_FREE_ONLY=1` overrides paid opt-in. Existing `studio_models.json` IDs remain preferences; `STUDIO_MODEL_SELECTION=configured` preserves the explicit allowlist behavior, including its paid IDs. `STUDIO_AUTO_MODEL_FALLBACK=0` restricts either mode to configured IDs. Credit rejection can lock the rest of an OpenRouter job to free fallbacks; later agents cannot silently return to paid models. All attempts still require ledger reservations.
+
+Set `AI_PROVIDER=dahl` to use `DAHL_API_KEY` and `DAHL_BASE_URL` (default `https://inference.dahl.global/v1`). `DAHL_MODEL_SUPERVISOR`, `DAHL_MODEL_DESIGNER`, `DAHL_MODEL_DEVELOPER`, `DAHL_MODEL_ART`, and `DAHL_MODEL_QA` hold optional preferences from Dahl's live `/models` catalog; comma-separated IDs specify ordered preferences in configured mode. UI inherits Designer's preferences and scene repair inherits Developer's, while their performance evidence is task-specific. Discovery uses a separate cache and never calls OpenRouter. Dahl has no image endpoints: the planner receives that limitation, and Art keeps local assets, explicit unavailable results for v2 images, and procedural fallback for legacy jobs. Dahl reservations use its [standard $0.02/M token rate](https://inference.dahl.global/pricing); when `usage.cost` is absent, charges remain labeled estimates. A truncated Dahl answer can retry once with a larger output reservation, within the job cap. Restart after changing provider settings.
+
+After editing `OPENROUTER_API_KEY` in `.env`, restart the bot. A variable already set in the launching environment takes precedence over `.env`. OpenRouter keys and models are used only with `AI_PROVIDER=openrouter`; Dahl uses its own key and model IDs. A `401 / User not found` is a rejected OpenRouter credential and cannot be fixed by changing models. A key's displayed spending limit is not account credit: account credits, key limits, model access, and the local $2 job cap are separate. Credit-rejected OpenRouter text calls may fall back to an eligible `:free` model, which still has provider rate limits. No paid generation can bypass the local cap.
 
 Use a **regular inference API key**, created at OpenRouter's [API Keys page](https://openrouter.ai/settings/keys). Management/provisioning keys can successfully query `/key` and model catalogs but cannot call completion endpoints, even on paid accounts. Preflight checks both `is_management_key` and the legacy `is_provisioning_key` flag and stops with an explanation before model discovery or generation. An account's free/paid tier does not determine this key type. DeepSeek in the default planning profile is selected by configuration, not by assuming the account is free; `:free` suffixes identify the explicit free fallbacks.
 
@@ -153,9 +162,37 @@ Generated implementation contracts are validated before Unity execution. Exact s
 
 ## What completion means
 
-The pipeline requires validated specs and existing files, C# compilation, explicit assembly evidence, two EditMode tests and ten PlayMode tests. A zero Unity exit code or an empty/skipped NUnit report cannot pass. Runtime tests exercise spawning, horizontal motion, jumping, double-jump prevention, landing/ground detection, coin collision and scoring, assigned references, sprite presence, touch-button movement, menu-to-level and exit-to-results transitions, collision rules and preview rendering. Runtime exceptions fail tests.
+Every pipeline requires validated specs and existing files, C# compilation, explicit assembly evidence and real NUnit results. Version 2 runs two scene/reference EditMode tests and a PlayMode harness that executes every requirement-linked probe from a fresh scene. Missing runtime requirement coverage is rejected before Unity starts. The legacy platformer path retains its ten mechanic-specific PlayMode tests. A zero Unity exit code or an empty/skipped NUnit report cannot pass. Runtime exceptions fail checks. Screenshots are retained for human review; arbitrary games are not required to contain a fixed button color or touch UI.
 
 The initial run plus at most three repair rounds is allowed. Actual scene errors route to Unity Developer; generated-code and gameplay errors route to QA/coding. Every repair re-runs compilation, assembly and affected tests. Infrastructure/template failures stop explicitly rather than spending on an unrelated generated script. Failed jobs retain diagnostics and never deliver an unverified result as completed.
+
+## Stabilization and audit commands
+
+Telegram's catch-all previously returned the complete `/start` menu for every unmatched update. Python Telegram Bot's command handler only recognizes a `BOT_COMMAND` entity at offset zero addressed to this bot; pasted/indented commands, caption commands and unknown commands could therefore reach the menu response. Normal `/create` registration was already correct. The fallback now recovers known commands, preserves their descriptions, ignores commands addressed to another bot, and gives a short usage response for unsupported messages. Long plans are split into Telegram-safe messages, so an oversized plan cannot silently lose its approval instructions. Native command-entity dispatch and fallback recovery have separate regression tests. The exact payload of the earlier reported incident was not recorded, so its entity/addressing failure cannot be proven retrospectively.
+
+An explicit `/create` supersedes an idle waiting plan; a new game is never appended as an instruction to a running build. Ordinary follow-up details retain their existing behavior. Operation tracking uses the actual task, duplicate update IDs are bounded and deduplicated, cancelled planning releases the job, and an interrupted planning job with no saved specification cannot auto-resume as a build. Restart the bot after source or `.env` changes: a running Python process keeps its loaded code.
+
+The five existing agents remain. UI is a Designer task using the `ui` profile; scene repairs are Developer tasks using `scene`. `shared_context.json` records the original/effective prompt, specification hash, requirement IDs, installed project version and ownership. Handoffs enforce stage dependencies, and `work_items.json` only marks requirement-linked work verified after its dependencies and checks pass. Repairs invalidate prior stage evidence, reject unchanged responses and stop on repeated failures. Component checks reject mixed physics, missing required bodies and legacy input calls before Unity; the assembler wires objects before activating them and supplies Unity 6's built-in UI font when needed. Visual reviews remain manual.
+
+The former generic PlayMode harness required a specific blue touch-button palette and white UI text for every genre. Those assertions were removed; game-specific controls/state probes and runtime errors remain authoritative, and screenshots are saved as visual-review evidence.
+
+Stop the Telegram controller before running these commands. Real audits use `jobs/verification_runs/`, retain reports, obey the configured cap, and leave `jobs/current.txt` intact:
+
+```powershell
+Set-Location C:\Users\new\Desktop\studio
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m tools.verify_live --preflight
+# Real provider planning, implementation and Unity verification; consumes inference tokens.
+.\.venv\Scripts\python.exe -m tools.verify_live
+# Deterministic engine audits, explicitly NOT AI-generated games; no API calls.
+.\.venv\Scripts\python.exe -m tools.verify_live --unity-fixture racing
+.\.venv\Scripts\python.exe -m tools.verify_live --unity-fixture puzzle
+# Retry a saved fixture after its first package import, instead of creating another project.
+.\.venv\Scripts\python.exe -m tools.verify_live --unity-fixture racing --resume-fixture <job-id>
+.\.venv\Scripts\python.exe telegram_bot.py
+```
+
+Pattern references studied: [UniGen](https://github.com/yxwan123/UniGen) for structured Unity blueprints and diagnostic-driven repair; [game-mcp](https://github.com/xthenyo/game-mcp) for task ownership and QA gates; [ChatDev](https://github.com/OpenBMB/ChatDev) for explicit workflow/context flow; [ai-game-studio](https://github.com/fl0wsam/ai-game-studio) for a shared blackboard and layered validators. These patterns were adapted to the existing contracts and tools, without importing their frameworks or assuming their advertised reliability applies here.
 
 Requirements that have runtime probes are reported passed only when Unity supplies fresh matching evidence. Visual requirements require manual review. The planner and QA agent record unanswered requirements, unavailable assets, unsupported expectations and other limitations; those keep the result partial. The image service can make sprites and textures, but cannot make 3D models, audio, animation or complete prefab packages. Such requests need licensed files in the optional local `asset_library/` folder or remain explicitly unavailable. The builder can make described procedural geometry and materials; it does not provide a universal asset marketplace. The automatic screenshot is evidence of the rendered scene, not an artistic-quality verdict. No device install or publication happens automatically.
 

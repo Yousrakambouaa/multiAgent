@@ -30,6 +30,8 @@ class ResponseTests(unittest.TestCase):
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        settings = patch.dict(os.environ, {"AI_PROVIDER": "openrouter", "STUDIO_FREE_ONLY": "0"})
+        settings.start(); self.addCleanup(settings.stop)
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.job = Job.create("test", .1, root=Path(self.temp.name))
         registry = Registry()
@@ -58,6 +60,16 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.requests[0]["model"], self.requests[1]["model"])
         self.assertEqual(self.requests[0]["provider"]["max_price"], {"prompt": 0, "completion": 0})
         self.assertEqual(self.requests[0]["reasoning"], {"enabled": False})
+
+    async def test_mandatory_reasoning_retries_same_openrouter_model_enabled(self):
+        result = await self.run_replies([
+            httpx.Response(400, json={"error": {"message": "Reasoning is mandatory for this endpoint and cannot be disabled."}}),
+            httpx.Response(200, json=completion())])
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual([request["model"] for request in self.requests], ["one", "one"])
+        self.assertEqual([request["reasoning"] for request in self.requests],
+                         [{"enabled": False}, {"enabled": True}])
+        self.assertEqual(len(self.job.data["costs"]), 2)
 
     async def test_null_answer_and_non_json_envelope_fall_back(self):
         for response in [httpx.Response(200, json=completion(None)), httpx.Response(200, text="not JSON")]:
@@ -94,6 +106,17 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             await self.run_replies([httpx.Response(429, json={"error": {"message": "busy"}})])
         self.assertEqual(len(self.requests), 1)
 
+    async def test_credit_restriction_persists_for_later_agent_calls(self):
+        registry=self.service.registry
+        registry.models["free:free"]=registry.models["one"]
+        registry.roles["designer"].append("free:free")
+        await self.run_replies([httpx.Response(402,json={"error":{"message":"Insufficient credits"}}),
+                                httpx.Response(200,json=completion())])
+        self.assertTrue(self.job.data["openrouter_free_only"])
+        self.service=ModelService(registry,self.job)
+        await self.run_replies([httpx.Response(200,json=completion())])
+        self.assertEqual([r["model"] for r in self.requests],["one","free:free","free:free"])
+
     async def test_invalid_mcp_configuration_does_not_block_agent_request(self):
         (self.job.directory / "UnityProject").mkdir()
         with patch.dict(os.environ, {"STUDIO_UNITY_MCP_ENABLED": "1", "STUDIO_UNITY_MCP_ARGS_JSON": "bad"}):
@@ -108,6 +131,10 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AffordableOutputRetryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        settings = patch.dict(os.environ, {"AI_PROVIDER": "openrouter"})
+        settings.start(); self.addCleanup(settings.stop)
+
     async def test_openrouter_affordability_402_retries_once_with_lower_output_limit(self):
         class FakeJob:
             data = {"costs": [], "cap_usd": 2}

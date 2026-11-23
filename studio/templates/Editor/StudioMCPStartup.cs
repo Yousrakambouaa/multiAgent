@@ -11,7 +11,7 @@ public static class StudioMCPStartup
 {
     [Serializable] class Config { public bool enabled; public string python; public string transport; }
     static readonly Config config;
-    static readonly double deadline;
+    static double deadline;
     static double nextAttempt;
 
     static StudioMCPStartup()
@@ -30,7 +30,6 @@ public static class StudioMCPStartup
         // uvx launched from the Unity HTTP window inherits this interpreter choice too.
         Environment.SetEnvironmentVariable("UV_PYTHON", config.python);
         if (Application.isBatchMode) return;
-        deadline = EditorApplication.timeSinceStartup + 120;
         EditorApplication.update += StartWhenReady;
     }
 
@@ -38,13 +37,16 @@ public static class StudioMCPStartup
     {
         if (EditorApplication.timeSinceStartup < nextAttempt) return;
         nextAttempt = EditorApplication.timeSinceStartup + 1;
+        // Initial imports can take minutes. Begin the bounded bridge attempt
+        // window only when the Editor can actually accept operations.
+        if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;
+        if (deadline == 0) deadline = EditorApplication.timeSinceStartup + 120;
         if (EditorApplication.timeSinceStartup > deadline)
         {
             EditorApplication.update -= StartWhenReady;
             Debug.LogWarning("Studio MCP: bridge startup timed out; see the MCP package/Editor logs.");
             return;
         }
-        if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;
         var type = AppDomain.CurrentDomain.GetAssemblies()
             .Select(a => a.GetType("MCPForUnity.Editor.McpCiBoot", false)).FirstOrDefault(t => t != null);
         var start = type?.GetMethod("StartStdioForCi", BindingFlags.Public | BindingFlags.Static);

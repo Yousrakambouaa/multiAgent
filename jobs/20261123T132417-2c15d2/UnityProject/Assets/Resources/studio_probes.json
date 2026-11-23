@@ -1,0 +1,177 @@
+{
+  "probes": [
+    {
+      "id": "probe_player_exists",
+      "requirement_ids": [
+        "R3"
+      ],
+      "scene": "MainGame",
+      "steps": [],
+      "assertions": [
+        {
+          "kind": "exists",
+          "object_id": "player",
+          "component": "",
+          "member": "",
+          "comparison": "equals",
+          "value": "true"
+        },
+        {
+          "kind": "active",
+          "object_id": "player",
+          "component": "",
+          "member": "",
+          "comparison": "equals",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "probe_player_moves_right",
+      "requirement_ids": [
+        "R3",
+        "R4"
+      ],
+      "scene": "MainGame",
+      "steps": [
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 10
+        },
+        {
+          "action": "key",
+          "object_id": "",
+          "component": "",
+          "member": "D",
+          "value": "true",
+          "frames": 1
+        },
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 30
+        },
+        {
+          "action": "key",
+          "object_id": "",
+          "component": "",
+          "member": "D",
+          "value": "false",
+          "frames": 1
+        },
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 5
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "position_changed",
+          "object_id": "player",
+          "component": "",
+          "member": "",
+          "comparison": "equals",
+          "value": "0.5"
+        }
+      ]
+    },
+    {
+      "id": "probe_player_jumps",
+      "requirement_ids": [
+        "R4"
+      ],
+      "scene": "MainGame",
+      "steps": [
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 20
+        },
+        {
+          "action": "key",
+          "object_id": "",
+          "component": "",
+          "member": "Space",
+          "value": "true",
+          "frames": 1
+        },
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 2
+        },
+        {
+          "action": "key",
+          "object_id": "",
+          "component": "",
+          "member": "Space",
+          "value": "false",
+          "frames": 1
+        },
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 15
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "property",
+          "object_id": "player",
+          "component": "PlayerSquareController",
+          "member": "IsGrounded",
+          "comparison": "equals",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "id": "probe_ground_collision",
+      "requirement_ids": [
+        "R2",
+        "R4"
+      ],
+      "scene": "MainGame",
+      "steps": [
+        {
+          "action": "wait",
+          "object_id": "",
+          "component": "",
+          "member": "",
+          "value": "",
+          "frames": 60
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "property",
+          "object_id": "player",
+          "component": "PlayerSquareController",
+          "member": "IsGrounded",
+          "comparison": "equals",
+          "value": "true"
+        }
+      ]
+    }
+  ]
+}

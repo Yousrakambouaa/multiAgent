@@ -4,6 +4,7 @@ Version 1 remains readable by the existing platformer pipeline. These are data
 contracts and tools, not additional AI agents.
 """
 import json
+import math
 import re
 from typing import Literal
 
@@ -129,11 +130,15 @@ class GameSpecV2(Contract):
         tasks = {t.id: t for t in self.tasks}
         if len(tasks) != len(self.tasks):
             raise ValueError("Duplicate task IDs")
+        visited = set()
         def visit(key, active):
             if key not in tasks or key in active:
                 raise ValueError("Missing or cyclic task dependency")
+            if key in visited:
+                return
             for dep in tasks[key].dependencies:
                 visit(dep, active | {key})
+            visited.add(key)
         for item in [*self.required_assets, *self.tasks]:
             if not set(item.requirement_ids) <= reqs:
                 raise ValueError("Unknown requirement ID")
@@ -310,6 +315,13 @@ class PlanReview(Contract):
     concerns: list[str] = Field(default_factory=list)
 
 
+class GameUIPlan(Contract):
+    screens: list[str] = Field(default_factory=list, max_length=30)
+    controls: list[str] = Field(min_length=1, max_length=30)
+    layout: list[str] = Field(default_factory=list, max_length=30)
+    accessibility: list[str] = Field(default_factory=list, max_length=20)
+
+
 def load_game_spec(value):
     if isinstance(value, str):
         value = json.loads(value)
@@ -323,12 +335,136 @@ def validate_prompt_trace(spec, request):
             raise ValueError(f"{req.id}: original_instruction must quote the user's prompt exactly")
 
 
+def explicit_requested_dimension(request):
+    """Return a clearly stated 2D or 3D game dimension from a user request."""
+    text = str(request or "")
+    mentions = []
+    patterns = (("2D", r"(?<![A-Za-z0-9])(?:2\s*D|two[ -]?dimensional)(?![A-Za-z0-9])"),
+                ("3D", r"(?<![A-Za-z0-9])(?:3\s*D|three[ -]?dimensional)(?![A-Za-z0-9])"))
+    game_mentions = []
+    for dimension, pattern in patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            prefix = text[max(0, match.start() - 18):match.start()].casefold()
+            if re.search(r"\b(?:not|no|without|avoid|instead of)\s+(?:a\s+)?$", prefix):
+                continue
+            mentions.append((match.start(), dimension))
+            following = text[match.end():match.end() + 70]
+            preceding = text[max(0, match.start() - 45):match.start()]
+            if (re.match(r"(?:\s+[\w'-]+){0,5}\s+(?:game|gameplay|platformer|racing|shooter|puzzle|"
+                         r"simulation|roguelike|adventure|strategy)\b", following, re.IGNORECASE)
+                    or re.search(r"\b(?:game|gameplay|world|levels?)\s+(?:in|as|for)\s+$",
+                                 preceding, re.IGNORECASE)):
+                game_mentions.append((match.start(), dimension))
+    game_dimensions = {dimension for _, dimension in game_mentions}
+    if len(game_dimensions) == 1:
+        return next(iter(game_dimensions))
+    dimensions = {dimension for _, dimension in mentions}
+    if len(dimensions) == 1:
+        return next(iter(dimensions))
+    return None
+
+
+def enforce_requested_dimension(request, spec):
+    """Make an unambiguous explicit prompt dimension authoritative over planner drift."""
+    if getattr(spec, "version", 1) != 2:
+        return None
+    requested = explicit_requested_dimension(request)
+    if requested is None or requested == spec.dimension:
+        return None
+    planned = spec.dimension
+    spec.dimension = requested
+    return {"requested": requested, "planned": planned}
+
+
+def _property_vector(value, size, context):
+    try:
+        parsed = json.loads(value) if isinstance(value, str) and value.lstrip().startswith("[") else value
+        if isinstance(parsed, str):
+            parsed = [part.strip() for part in parsed.split(",")]
+        if not isinstance(parsed, (list, tuple)) or len(parsed) != size:
+            raise ValueError
+        result = tuple(float(part) for part in parsed)
+        if not all(math.isfinite(part) for part in result):
+            raise ValueError
+        return result
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError(f"{context} must contain exactly {size} finite numbers") from error
+
+
+def _validate_scene_values(spec, plan):
+    for scene in plan.scenes.scenes:
+        objects = {obj.id: obj for obj in scene.objects}
+        for obj in scene.objects:
+            if any(abs(value) < 1e-6 for value in obj.scale):
+                raise ValueError(f"Object {obj.id!r} has a zero transform scale")
+            for component in obj.components:
+                properties = {}
+                for prop in component.properties:
+                    key = prop.name.casefold()
+                    if key in properties:
+                        raise ValueError(f"Object {obj.id!r} declares property {prop.name!r} more than once")
+                    properties[key] = prop
+                    context = f"{scene.name}/{obj.id}/{component.type}.{prop.name}"
+                    try:
+                        if prop.kind in ("float", "int"):
+                            number = float(prop.value)
+                            if not math.isfinite(number) or (prop.kind == "int" and not number.is_integer()):
+                                raise ValueError
+                        elif prop.kind == "bool" and prop.value.casefold() not in ("true", "false"):
+                            raise ValueError
+                        elif prop.kind == "color" and not re.fullmatch(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?", prop.value):
+                            raise ValueError
+                        elif prop.kind == "vector2":
+                            _property_vector(prop.value, 2, context)
+                        elif prop.kind == "vector3":
+                            _property_vector(prop.value, 3, context)
+                    except (TypeError, ValueError) as error:
+                        raise ValueError(f"Invalid value for {context}: {prop.value!r}") from error
+                    if prop.kind == "reference":
+                        target_id, separator, target_type = prop.value.partition(":")
+                        target = objects.get(target_id)
+                        if target is None:
+                            raise ValueError(f"Object {obj.id!r} has a missing reference target {target_id!r}")
+                        if separator and target_type not in {"UnityEngine.Transform", "Transform",
+                                                              "UnityEngine.GameObject", "GameObject"} and target_type not in {
+                                item.type for item in target.components} and target_type.rsplit(".", 1)[-1] not in {
+                                item.type.rsplit(".", 1)[-1] for item in target.components}:
+                            raise ValueError(f"Reference {prop.value!r} names a component not declared on {target_id!r}")
+                    if prop.kind == "asset" and (not prop.value.startswith("Assets/") or ".." in prop.value or "\\" in prop.value):
+                        raise ValueError(f"Object {obj.id!r} has an invalid asset reference {prop.value!r}")
+
+                component_name = component.type.rsplit(".", 1)[-1]
+                vector_size = 2 if component_name.endswith("2D") else 3
+                vector_fields = {"BoxCollider2D": ("size",), "BoxCollider": ("size",),
+                                 "CapsuleCollider2D": ("size",), "CapsuleCollider": ("size",)}
+                for field in vector_fields.get(component_name, ()):
+                    prop = properties.get(field.casefold())
+                    if prop is None:
+                        continue
+                    dimensions = _property_vector(prop.value, vector_size,
+                        f"{scene.name}/{obj.id}/{component.type}.{field}")
+                    if any(value <= 0 for value in dimensions):
+                        raise ValueError(f"Collider dimensions must be positive: {scene.name}/{obj.id}/{component.type}.{field}")
+                radius_fields = {"CircleCollider2D": ("radius",), "SphereCollider": ("radius",),
+                                 "CapsuleCollider": ("radius", "height")}
+                for field in radius_fields.get(component_name, ()):
+                    prop = properties.get(field)
+                    if prop is not None:
+                        try:
+                            valid = math.isfinite(float(prop.value)) and float(prop.value) > 0
+                        except (TypeError, ValueError):
+                            valid = False
+                        if not valid:
+                            raise ValueError(f"Collider {field} must be a positive finite number: {scene.name}/{obj.id}/{component.type}")
+
+
 def validate_implementation(spec, plan):
     reqs = {r.id for r in spec.requirements}
     if [s.name for s in plan.scenes.scenes] != spec.scenes or plan.scenes.dimension != spec.dimension:
         raise ValueError("Implementation changed scene structure or dimension")
     if plan.scenes.orientation != spec.orientation:
         raise ValueError("Implementation changed requested orientation")
+    _validate_scene_values(spec, plan)
     if not set(plan.implemented_requirement_ids) <= reqs:
         raise ValueError("Unknown implementation requirement")
     if len({p.id for p in plan.probes}) != len(plan.probes):
@@ -342,15 +478,31 @@ def validate_implementation(spec, plan):
         if not any(component.type.rsplit(".", 1)[-1] == "Camera"
                    for obj in scene.objects for component in obj.components):
             raise ValueError(f"Scene {scene.name!r} must explicitly declare a Camera so the game is visible.")
+        if spec.dimension == "mixed" and not any(
+                component.type.rsplit(".", 1)[-1] == "Camera" and any(
+                    prop.name.casefold() == "orthographic" for prop in component.properties)
+                for obj in scene.objects for component in obj.components):
+            raise ValueError(f"Mixed-dimension scene {scene.name!r} must explicitly set its Camera projection.")
         for obj in scene.objects:
             if not set(obj.requirement_ids) <= reqs or (obj.material and obj.material not in materials):
                 raise ValueError("Unknown object requirement or material")
             component_names = {component.type.rsplit(".", 1)[-1] for component in obj.components}
+            if len(component_names) != len(obj.components):
+                raise ValueError(f"Object {obj.id!r} declares duplicate component types")
+            two_d = component_names.intersection({"Rigidbody2D", "BoxCollider2D", "CircleCollider2D", "CapsuleCollider2D", "PolygonCollider2D", "EdgeCollider2D", "CompositeCollider2D"})
+            three_d = component_names.intersection({"Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController"})
+            if two_d and three_d:
+                raise ValueError(f"Object {obj.id!r} mixes 2D and 3D physics")
+            if spec.dimension == "2D" and three_d:
+                raise ValueError(f"2D game object {obj.id!r} declares 3D physics components")
+            if spec.dimension == "3D" and two_d:
+                raise ValueError(f"3D game object {obj.id!r} declares 2D physics components")
             graphics = component_names.intersection({"Image", "RawImage", "Text", "TextMeshProUGUI", "TMP_Text"})
             if len(graphics) > 1:
                 raise ValueError(f"Object {obj.id!r} has multiple UGUI Graphic components; place Text labels on child objects.")
             if "Button" in component_names and not graphics.intersection({"Image", "RawImage", "Text", "TextMeshProUGUI", "TMP_Text"}):
                 raise ValueError(f"Button {obj.id!r} needs a Graphic component such as Image.")
+        _validate_screen_ui_bounds(scene)
     for probe in plan.probes:
         if not set(probe.requirement_ids) <= reqs or probe.scene not in spec.scenes:
             raise ValueError("Unknown probe requirement or scene")
@@ -374,7 +526,91 @@ def validate_implementation(spec, plan):
                         f"Unknown probe object {item.object_id!r}: probe {probe.id!r}, "
                         f"scene {probe.scene!r}, {section}[{index}]. "
                         f"Use an object ID declared in that scene. Available IDs: {available}")
+    covered = {rid for p in plan.probes for rid in p.requirement_ids}
+    missing = {r.id for r in spec.requirements if r.verification_method == "runtime"} - covered
+    if missing:
+        raise ValueError("Missing behavioral probes for runtime requirements: " + ", ".join(sorted(missing)))
     return plan
+
+
+def _parse_ui_vector(value, fallback):
+    if value is None:
+        return fallback
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+        if isinstance(parsed, (list, tuple)) and len(parsed) >= 2:
+            return (float(parsed[0]), float(parsed[1]))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return fallback
+
+
+def _validate_screen_ui_bounds(scene):
+    """Catch centered UI rectangles that the generated Canvas would clip."""
+    by_id = {obj.id: obj for obj in scene.objects}
+    canvas = next((obj for obj in scene.objects if any(
+        component.type.rsplit(".", 1)[-1] == "Canvas" for component in obj.components)), None)
+    if canvas is None:
+        return
+    canvas_components = {component.type.rsplit(".", 1)[-1]: component for component in canvas.components}
+    canvas_props = {prop.name.casefold(): prop.value for component in canvas.components for prop in component.properties}
+    if canvas_props.get("rendermode", "ScreenSpaceOverlay").casefold() in {"worldspace", "2"}:
+        return
+    scaler = canvas_components.get("CanvasScaler")
+    reference = next((prop.value for prop in scaler.properties if prop.name.casefold() == "referenceresolution"), None) if scaler else None
+    canvas_size = _parse_ui_vector(reference, (800.0, 600.0))
+    rect_cache = {canvas.id: ((0.0, 0.0), canvas_size)}
+
+    def rect_for(obj):
+        if obj.id in rect_cache:
+            return rect_cache[obj.id]
+        parent = by_id.get(obj.parent)
+        if parent is None:
+            return ((0.0, 0.0), (0.0, 0.0))
+        parent_center, parent_size = rect_for(parent)
+        rect_component = next((component for component in obj.components
+            if component.type.rsplit(".", 1)[-1] == "RectTransform"), None)
+        props = {prop.name.casefold(): prop.value for prop in rect_component.properties} if rect_component else {}
+        anchor_min = _parse_ui_vector(props.get("anchormin"), (0.5, 0.5))
+        anchor_max = _parse_ui_vector(props.get("anchormax"), anchor_min)
+        pivot = _parse_ui_vector(props.get("pivot"), (0.5, 0.5))
+        size_delta = _parse_ui_vector(props.get("sizedelta"), (100.0, 100.0))
+        size = (size_delta[0] + (anchor_max[0] - anchor_min[0]) * parent_size[0],
+                size_delta[1] + (anchor_max[1] - anchor_min[1]) * parent_size[1])
+        anchor_center = ((anchor_min[0] + anchor_max[0]) * 0.5,
+                         (anchor_min[1] + anchor_max[1]) * 0.5)
+        pivot_position = (parent_center[0] + (anchor_center[0] - 0.5) * parent_size[0] + obj.position[0],
+                          parent_center[1] + (anchor_center[1] - 0.5) * parent_size[1] + obj.position[1])
+        center = (pivot_position[0] + (0.5 - pivot[0]) * size[0],
+                  pivot_position[1] + (0.5 - pivot[1]) * size[1])
+        rect_cache[obj.id] = (center, size)
+        return rect_cache[obj.id]
+
+    for obj in scene.objects:
+        graphic = any(component.type.rsplit(".", 1)[-1] in
+                      {"Image", "RawImage", "Text", "TextMeshProUGUI", "TMP_Text", "Button"}
+                      for component in obj.components)
+        has_rect_size = any(prop.name.casefold() == "sizedelta"
+                            for component in obj.components for prop in component.properties)
+        if not graphic or not has_rect_size:
+            continue
+        parent_id = obj.parent
+        under_canvas = False
+        while parent_id and parent_id in by_id:
+            if parent_id == canvas.id:
+                under_canvas = True
+                break
+            parent_id = by_id[parent_id].parent
+        if not under_canvas:
+            continue
+        center, size = rect_for(obj)
+        left, right = center[0] - size[0] / 2, center[0] + size[0] / 2
+        bottom, top = center[1] - size[1] / 2, center[1] + size[1] / 2
+        if (left < -canvas_size[0] / 2 - 1 or right > canvas_size[0] / 2 + 1 or
+                bottom < -canvas_size[1] / 2 - 1 or top > canvas_size[1] / 2 + 1):
+            raise ValueError(
+                f"UI object {obj.id!r} extends beyond the {canvas_size[0]:g}x{canvas_size[1]:g} "
+                "Canvas reference frame. Move or resize it so it stays on-screen.")
 
 
 def requirement_report(spec, plan=None, runtime=None, assets=None):

@@ -189,13 +189,13 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         async def fake_art(*args):
             write_json(job.directory/"art_manifest.json",[dict(kind=a.kind,path=art[a.kind],source="original procedural fallback") for a in spec.required_assets])
             return art
-        runner=SimpleNamespace(compile=AsyncMock(side_effect=failures),assemble=AsyncMock(side_effect=assembly_failures,return_value={"success":True}),tests=AsyncMock(return_value={"status":"passed"}))
+        runner=SimpleNamespace(compile=AsyncMock(side_effect=failures),assemble=AsyncMock(side_effect=assembly_failures,return_value={"success":True}),tests=AsyncMock(return_value={"status":"passed"}),android=AsyncMock(return_value={"status":"passed","device_test":"unverified"}))
         runner.scene_repair=AsyncMock(return_value=assemble_scenes(spec,ui,art))
         repair=AsyncMock(return_value=bundle)
         with ExitStack() as stack:
             for target,value in {
                 "Registry.refresh":AsyncMock(),
-                "bootstrap":lambda job:project,"UnityDeveloper.generate":AsyncMock(return_value=bundle),
+                "bootstrap":lambda job,dimension="2D":project,"UnityDeveloper.generate":AsyncMock(return_value=bundle),
                 "GameDesigner.plan_ui":AsyncMock(return_value=ui),"ArtDesigner.create":fake_art,
                 "UnityDeveloper.repair_scenes":runner.scene_repair,
                 "validate_files":lambda *args:None,"UnityRunner":lambda *args:runner,
@@ -262,7 +262,7 @@ class FailedJobRetryTests(unittest.IsolatedAsyncioTestCase):
         studio.root=Path("virtual-root")
         studio.job=job
         studio.lock=asyncio.Lock()
-        studio.registry=SimpleNamespace(refresh=AsyncMock())
+        studio.registry=SimpleNamespace(refresh=AsyncMock(), provider=SimpleNamespace(name="dahl"))
         service=SimpleNamespace(unity_context=AsyncMock())
         class NoopLock:
             def __init__(self,*args):pass
@@ -272,7 +272,7 @@ class FailedJobRetryTests(unittest.IsolatedAsyncioTestCase):
         def has_saved_spec(path):
             if path==job.directory/"game_spec.json":return True
             return real_is_file(path)
-        with patch("studio.supervisor.ProcessLock",NoopLock),patch("studio.supervisor.ModelService",return_value=service),patch("studio.supervisor.load_game_spec",return_value=spec),patch("studio.supervisor.write_json"),patch("studio.supervisor.asyncio.to_thread",new=AsyncMock(return_value=job.directory/"UnityProject")),patch("studio.generation.build_flexible",AsyncMock(return_value=["artifact"])) as build,patch.object(Path,"is_file",has_saved_spec),patch.object(Path,"read_text",return_value="{}"):
+        with patch("studio.coordination.share_game"),patch("studio.supervisor.ProcessLock",NoopLock),patch("studio.supervisor.ModelService",return_value=service),patch("studio.supervisor.load_game_spec",return_value=spec),patch("studio.supervisor.write_json"),patch("studio.supervisor.asyncio.to_thread",new=AsyncMock(return_value=job.directory/"UnityProject")),patch("studio.generation.build_flexible",AsyncMock(return_value=["artifact"])) as build,patch.object(Path,"is_file",has_saved_spec),patch.object(Path,"read_text",return_value="{}"):
             await studio.approve()
         self.assertEqual(job.data["status"],"building")
         self.assertEqual(job.data["error"],"")

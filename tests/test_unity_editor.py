@@ -1,5 +1,7 @@
 import os
 import shutil
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from studio.state import Job
-from studio.unity import UnityFailure, UnityRunner, ensure_live_editor, uses_live_editor
+from studio.unity import UnityFailure, UnityRunner, bootstrap, ensure_live_editor, uses_live_editor
 
 
 class LiveEditorStartupTests(unittest.IsolatedAsyncioTestCase):
@@ -29,7 +31,8 @@ class LiveEditorStartupTests(unittest.IsolatedAsyncioTestCase):
         process = SimpleNamespace(pid=4321, poll=lambda: None)
         with patch.dict(os.environ, {
                 "STUDIO_UNITY_MCP_ENABLED": "1", "STUDIO_UNITY_STARTUP_TIMEOUT": "30",
-                "OPENROUTER_API_KEY": "must-not-reach-editor", "TELEGRAM_BOT_TOKEN": "must-not-reach-editor"}), \
+                "OPENROUTER_API_KEY": "must-not-reach-editor", "DAHL_API_KEY": "must-not-reach-editor",
+                "TELEGRAM_BOT_TOKEN": "must-not-reach-editor"}), \
              patch("studio.unity.UNITY", self.editor), \
              patch("studio.unity.project_is_open", side_effect=[False, True]), \
              patch("studio.unity.subprocess.Popen", return_value=process) as launch, \
@@ -42,6 +45,7 @@ class LiveEditorStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("-batchmode", command)
         self.assertNotIn("-quit", command)
         self.assertNotIn("OPENROUTER_API_KEY", launch.call_args.kwargs["env"])
+        self.assertNotIn("DAHL_API_KEY", launch.call_args.kwargs["env"])
         self.assertNotIn("TELEGRAM_BOT_TOKEN", launch.call_args.kwargs["env"])
         self.client.connect.assert_awaited_once()
         self.client.verify_project.assert_awaited_once_with(self.project.resolve())
@@ -104,6 +108,42 @@ class LiveEditorStartupTests(unittest.IsolatedAsyncioTestCase):
         command = batch.await_args.args
         self.assertIn("-batchmode", command)
         self.assertEqual(command[command.index("-projectPath") + 1], str(self.project))
+
+
+class UnityProjectDimensionTests(unittest.TestCase):
+    def _bootstrap_with_dimension(self, root, dimension):
+        template=root/"generated_game"
+        for relative in ("ProjectSettings/ProjectSettings.asset", "Packages/manifest.json",
+                "Assets/Settings/Renderer2D.asset", "Assets/Settings/UniversalRP.asset",
+                "Assets/Settings/DefaultVolumeProfile.asset", "Assets/Settings/InputSystem_Actions.inputactions",
+                "Assets/Settings/Scenes/URP2DSceneTemplate.unity"):
+            path=template/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text("template",encoding="utf-8")
+        (template/"ProjectSettings/ProjectSettings.asset").write_text("activeInputHandler: 0",encoding="utf-8")
+        (root/"studio_templates").mkdir()
+        job=Job.create("dimension fixture",1,root=root/"jobs")
+        with patch("studio.unity.ROOT",root),patch("studio.unity.TEMPLATES",root/"studio_templates"), \
+                patch("studio.unity.available_space",return_value=10_000_000_000), \
+                patch("studio.mcp_setup.prepare_mcp_project"):
+            project=bootstrap(job,dimension)
+        return job,project
+
+    def test_2d_and_3d_project_dimensions_are_stamped_before_editor_startup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            job2d,project2d=self._bootstrap_with_dimension(root/"two", "2D")
+            job3d,project3d=self._bootstrap_with_dimension(root/"three", "3D")
+            for project,dimension in ((project2d,"2D"),(project3d,"3D")):
+                self.assertEqual(json.loads((project/"Assets/Resources/studio_dimension.json").read_text())["dimension"],dimension)
+                self.assertEqual(json.loads((project/"ProjectSettings/StudioGameProject.json").read_text())["dimension"],dimension)
+            self.assertTrue((project2d/"Assets/Settings/Renderer2D.asset").is_file())
+            self.assertTrue((project2d/"Assets/Settings/Scenes/URP2DSceneTemplate.unity").is_file())
+            self.assertFalse((project3d/"Assets/Settings/Renderer2D.asset").exists())
+            self.assertFalse((project3d/"Assets/Settings/UniversalRP.asset").exists())
+            self.assertFalse((project3d/"Assets/Settings/Scenes/URP2DSceneTemplate.unity").exists())
+            with patch("studio.unity.available_space",return_value=10_000_000_000), \
+                    patch("studio.mcp_setup.prepare_mcp_project"):
+                with self.assertRaisesRegex(UnityFailure,"dimension does not match"):
+                    bootstrap(job2d,"3D")
 
 
 if __name__ == "__main__":

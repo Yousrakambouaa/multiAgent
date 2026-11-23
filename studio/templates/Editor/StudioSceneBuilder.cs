@@ -152,6 +152,7 @@ public static class StudioSceneBuilder {
         File.WriteAllText(Output("assembly.json"),JsonUtility.ToJson(evidence,true));
         if(!evidence.success && Application.isBatchMode) EditorApplication.Exit(1);
     }
+    [MenuItem("Studio/Build Android APK")]
     public static void BuildAndroid() {
         var evidence=new Evidence { stage="android_build" };
         try {

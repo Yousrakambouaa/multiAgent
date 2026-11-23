@@ -8,6 +8,7 @@ from studio.costs import Ledger
 from studio.registry import Registry
 from studio.state import ProcessLock
 from studio.supervisor import Supervisor
+from studio.config import BUILD_ANDROID
 
 
 async def console(text):
@@ -72,12 +73,12 @@ async def run(args):
         job=await supervisor.submit(request,notify=console,demo=args.command=="demo")
         print("Job:",job.directory,flush=True)
         if args.approve and job.data["status"]=="awaiting_approval":
-            await supervisor.approve(notify=console,android=args.android)
+            await supervisor.approve(notify=console,android=(args.android or BUILD_ANDROID))
     elif args.command=="approve":
-        await supervisor.approve(notify=console,android=args.android)
+        await supervisor.approve(notify=console,android=(args.android or BUILD_ANDROID))
     elif args.command=="verify":
         from studio.verification import verify
-        await verify(supervisor,console,android=args.android)
+        await verify(supervisor,console,android=(args.android or BUILD_ANDROID))
     elif args.command=="cancel":
         print(supervisor.cancel())
     elif args.command=="status":

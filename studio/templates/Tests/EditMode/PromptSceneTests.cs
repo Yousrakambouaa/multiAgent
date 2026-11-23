@@ -9,9 +9,54 @@ using UnityEngine.UI;
 using Studio.Runtime;
 
 public class PromptSceneTests {
+    static UniversalSceneBuilder.Bundle MinimalBundle(string dimension) {
+        return new UniversalSceneBuilder.Bundle {
+            version=2, dimension=dimension, scenes=new[] {
+                new UniversalSceneBuilder.SceneData {
+                    name="Validation", objects=new[] {
+                        new UniversalSceneBuilder.ObjectData {
+                            id="camera", name="Camera", position=new[]{0f,0f,-10f}, scale=new[]{1f,1f,1f},
+                            rotation=new[]{0f,0f,0f}, components=new[] {
+                                new UniversalSceneBuilder.ComponentData { type="UnityEngine.Camera",
+                                    properties=new[] { new UniversalSceneBuilder.PropertyData {
+                                        name="orthographic", kind="bool", value="true" } } }
+                            }
+                        },
+                        new UniversalSceneBuilder.ObjectData {
+                            id="floor", name="Floor", position=new[]{0f,-1f,0f}, scale=new[]{1f,1f,1f},
+                            rotation=new[]{0f,0f,0f}, components=new[] {
+                                new UniversalSceneBuilder.ComponentData { type="UnityEngine.BoxCollider2D",
+                                    properties=new[] { new UniversalSceneBuilder.PropertyData {
+                                        name="size", kind="vector2", value="2,1" } } }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+    [Test] public void PreflightValidatesUnityPropertiesAndColliderBoundsBeforeAssembly() {
+        var bundle=MinimalBundle("2D");
+        Assert.DoesNotThrow(()=>UniversalSceneBuilder.ValidateBundle(bundle));
+        bundle.scenes[0].objects[1].components[0].properties[0].value="0,1";
+        Assert.Throws<System.Exception>(()=>UniversalSceneBuilder.ValidateBundle(bundle));
+        bundle=MinimalBundle("2D");
+        bundle.scenes[0].objects[0].components[0].properties[0].kind="string";
+        Assert.Throws<System.Exception>(()=>UniversalSceneBuilder.ValidateBundle(bundle));
+    }
+    [Test] public void MixedScenesRequireAnExplicitCameraProjection() {
+        var bundle=MinimalBundle("mixed");
+        bundle.scenes[0].objects[0].components[0].properties=System.Array.Empty<UniversalSceneBuilder.PropertyData>();
+        Assert.Throws<System.Exception>(()=>UniversalSceneBuilder.ValidateBundle(bundle));
+        bundle.scenes[0].objects[0].components[0].properties=new[] {
+            new UniversalSceneBuilder.PropertyData { name="orthographic", kind="bool", value="true" }
+        };
+        Assert.DoesNotThrow(()=>UniversalSceneBuilder.ValidateBundle(bundle));
+    }
     [Test] public void EverySpecifiedSceneAndComponentExists() {
         var bundle=JsonUtility.FromJson<UniversalSceneBuilder.Bundle>(File.ReadAllText("Assets/Resources/studio_scenes.json"));
         Assert.AreEqual(2,bundle.version);
+        Assert.DoesNotThrow(()=>UniversalSceneBuilder.ValidateBundle(bundle));
         CollectionAssert.AreEqual(bundle.scenes.Select(s=>"Assets/Studio/Scenes/"+s.name+".unity").ToArray(),EditorBuildSettings.scenes.Select(s=>s.path).ToArray());
         foreach(var spec in bundle.scenes) {
             var scene=EditorSceneManager.OpenScene("Assets/Studio/Scenes/"+spec.name+".unity",OpenSceneMode.Single);

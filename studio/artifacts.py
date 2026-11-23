@@ -23,7 +23,7 @@ def package(job, project, report):
                     archive.write(path, "UnityProject/" + path.relative_to(project).as_posix())
         for name in ("validation_report.json", "game_spec.json", "scene_spec.json", "ui_plan.json", "art_manifest.json", "PLAY.txt"):
             archive.write(job.directory / name, name)
-        for name in ("requirements.json", "implementation.json", "qa_review.json"):
+        for name in ("requirements.json", "implementation.json", "qa_review.json", "shared_context.json", "work_items.json", "compiler_repairs.json"):
             if (job.directory / name).is_file(): archive.write(job.directory / name, name)
         archive.writestr("job.json",json.dumps(dict(job.data,status=report.get("completion_status","completed")),indent=2))
     artifacts = [archive_path, report_path, job.directory / "PLAY.txt"]

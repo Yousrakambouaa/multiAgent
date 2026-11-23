@@ -1,0 +1,327 @@
+{
+  "version": 2,
+  "title": "Yellow Square Jump",
+  "dimension": "2D",
+  "orientation": "landscape",
+  "scenes": [
+    {
+      "name": "MainGame",
+      "kind": "gameplay",
+      "background_color": "#87CEEB",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4"
+      ],
+      "objects": [
+        {
+          "id": "main_camera",
+          "name": "Main Camera",
+          "role": "camera",
+          "parent": "",
+          "position": [
+            0.0,
+            3.0,
+            -10.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "MainCamera",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.Camera",
+              "properties": [
+                {
+                  "name": "orthographic",
+                  "kind": "bool",
+                  "value": "true"
+                },
+                {
+                  "name": "orthographicSize",
+                  "kind": "float",
+                  "value": "6"
+                },
+                {
+                  "name": "nearClipPlane",
+                  "kind": "float",
+                  "value": "0.1"
+                },
+                {
+                  "name": "farClipPlane",
+                  "kind": "float",
+                  "value": "100"
+                },
+                {
+                  "name": "backgroundColor",
+                  "kind": "color",
+                  "value": "#87CEEB"
+                },
+                {
+                  "name": "clearFlags",
+                  "kind": "enum",
+                  "value": "SolidColor"
+                }
+              ]
+            },
+            {
+              "type": "UnityEngine.AudioListener",
+              "properties": []
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": []
+        },
+        {
+          "id": "sky_background",
+          "name": "Sky Background",
+          "role": "decoration",
+          "parent": "",
+          "position": [
+            0.0,
+            3.0,
+            5.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "Assets/Studio/Art/sky_background.png",
+          "color": "#FFFFFF",
+          "sorting_order": -100,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.SpriteRenderer",
+              "properties": []
+            },
+            {
+              "type": "SkyBackgroundFitter",
+              "properties": [
+                {
+                  "name": "targetCamera",
+                  "kind": "reference",
+                  "value": "main_camera:UnityEngine.Camera"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R1"
+          ]
+        },
+        {
+          "id": "ground",
+          "name": "Ground",
+          "role": "ground",
+          "parent": "",
+          "position": [
+            0.0,
+            -2.0,
+            0.0
+          ],
+          "scale": [
+            30.0,
+            2.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "Assets/Studio/Art/ground_texture.png",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.SpriteRenderer",
+              "properties": []
+            },
+            {
+              "type": "UnityEngine.BoxCollider2D",
+              "properties": []
+            },
+            {
+              "type": "GroundFallback",
+              "properties": []
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R2"
+          ]
+        },
+        {
+          "id": "player",
+          "name": "Player",
+          "role": "player",
+          "parent": "",
+          "position": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Player",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFD700",
+          "sorting_order": 10,
+          "prefab": false,
+          "components": [
+            {
+              "type": "UnityEngine.SpriteRenderer",
+              "properties": []
+            },
+            {
+              "type": "UnityEngine.Rigidbody2D",
+              "properties": [
+                {
+                  "name": "gravityScale",
+                  "kind": "float",
+                  "value": "3"
+                },
+                {
+                  "name": "freezeRotation",
+                  "kind": "bool",
+                  "value": "true"
+                },
+                {
+                  "name": "collisionDetectionMode",
+                  "kind": "enum",
+                  "value": "Continuous"
+                }
+              ]
+            },
+            {
+              "type": "UnityEngine.BoxCollider2D",
+              "properties": [
+                {
+                  "name": "size",
+                  "kind": "vector2",
+                  "value": "1,1"
+                }
+              ]
+            },
+            {
+              "type": "PlayerSquareController",
+              "properties": [
+                {
+                  "name": "moveSpeed",
+                  "kind": "float",
+                  "value": "6"
+                },
+                {
+                  "name": "jumpForce",
+                  "kind": "float",
+                  "value": "9"
+                },
+                {
+                  "name": "groundCheckRadius",
+                  "kind": "float",
+                  "value": "0.25"
+                },
+                {
+                  "name": "groundCheck",
+                  "kind": "reference",
+                  "value": "ground_check:UnityEngine.Transform"
+                }
+              ]
+            }
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": [
+            "R3",
+            "R4"
+          ]
+        },
+        {
+          "id": "ground_check",
+          "name": "GroundCheck",
+          "role": "decoration",
+          "parent": "player",
+          "position": [
+            0.0,
+            0.45,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tag": "Untagged",
+          "layer": 0,
+          "sprite": "",
+          "color": "#FFFFFF",
+          "sorting_order": 0,
+          "prefab": false,
+          "components": [],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "active": true,
+          "primitive": "",
+          "model": "",
+          "material": "",
+          "mesh": null,
+          "requirement_ids": []
+        }
+      ]
+    }
+  ],
+  "materials": []
+}

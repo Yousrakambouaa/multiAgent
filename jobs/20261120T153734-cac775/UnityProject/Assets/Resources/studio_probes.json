@@ -77,6 +77,14 @@
           "member": "GetCollectedCoins",
           "comparison": "equals",
           "value": "1"
+        },
+        {
+          "kind": "property",
+          "object_id": "scoreText",
+          "component": "Text",
+          "member": "text",
+          "comparison": "equals",
+          "value": "Score: 1"
         }
       ]
     },

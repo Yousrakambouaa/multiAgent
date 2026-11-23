@@ -18,6 +18,7 @@ async def verify(supervisor, notify, android=False):
     if not project.exists(): raise RuntimeError("No generated Unity project")
     report={"job_id":job.data["id"],"game":"","project":str(project),"stages":{},"limitations":[
         "MVP supports 2D platformers only.","Real-device UX and aesthetic quality require human review."]}
+    spec = None
     try:
         with ProcessLock(supervisor.root/".unity.lock"):
             job.check_cancelled(); job.data["status"]="building"; job.save()
@@ -56,6 +57,9 @@ async def verify(supervisor, notify, android=False):
             job.data["status"]="completed"; job.event("supervisor","completed")
             await notify("Saved project reverified. "+Ledger(job).summary())
     except Exception as error:
+        if spec is not None and spec.version == 2 and (job.directory/"validation_report.json").is_file():
+            report=json.loads((job.directory/"validation_report.json").read_text(encoding="utf-8"))
+            report["completion_status"]="failed"
         report["verification_error"]=str(error); write_json(job.directory/"validation_report.json",report)
         supervisor.fail(job,error); await notify("Verification failed: "+job.data["error"][:1800])
     return report
@@ -72,20 +76,28 @@ async def verify_flexible(supervisor, spec, project, notify, android):
     save_implementation(job, project, spec, plan)
     previous = job.directory / "validation_report.json"
     report = json.loads(previous.read_text(encoding="utf-8")) if previous.is_file() else {}
-    report.update(job_id=job.data["id"], game=spec.name, spec_version=2, project=str(project), stages={}, completion_status="partial")
+    report.update(job_id=job.data["id"], game=spec.name, dimension=spec.dimension,
+                  camera_perspective=spec.camera_perspective, target_platform=spec.target_platform,
+                  spec_version=2, project=str(project), stages={}, completion_status="partial")
     report.pop("verification_error", None)
     report.setdefault("limitations", list(spec.limitations) + list(plan.limitations))
     runner = UnityRunner(job, project)
     for name, operation in [("compilation", runner.compile), ("assembly", runner.assemble),
             ("EditMode", lambda: runner.tests("EditMode")), ("PlayMode", lambda: runner.tests("PlayMode"))]:
         await supervisor.notify(notify, "Reverification: " + name)
-        report["stages"][name] = await operation()
+        try:
+            report["stages"][name] = await operation()
+        except Exception as error:
+            report["stages"][name] = {"status": "failed", "error": str(error)}
+            report["completion_status"] = "failed"
+            write_json(job.directory/"validation_report.json",report)
+            raise
     runtime = json.loads((project / "Artifacts/runtime_checks.json").read_text(encoding="utf-8"))
     manifest = json.loads((job.directory / "art_manifest.json").read_text(encoding="utf-8"))
     report["requirements"] = requirement_report(spec, plan, runtime, manifest)
     write_json(job.directory / "requirements.json", report["requirements"])
     report["android"] = {"status": "not_requested", "device_test": "unverified"}
-    if android and spec.target_platform.casefold() == "android":
+    if android:
         report["android"] = await runner.android()
     if all(r["verification_result"] == "passed" and r["implementation_status"] != "incomplete" for r in report["requirements"]) and not report["limitations"]:
         report["completion_status"] = "completed"
