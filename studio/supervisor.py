@@ -6,15 +6,15 @@ from studio.api import ModelService
 from studio.artifacts import package
 from studio.assets import ArtDesigner
 from studio.config import BUILD_ANDROID, DEFAULT_CAP, JOBS, safe_path
-from studio.costs import BudgetExceeded, Ledger
+from studio.costs import BudgetExceeded, Ledger, validate_budget
 from studio.registry import Registry
 from studio.request_validation import NOISE
 from studio.schemas import GameSpec, UIPlan
-from studio.flexible import enforce_requested_dimension, load_game_spec, requirement_report
+from studio.flexible import align_tooling_requirements, enforce_requested_dimension, load_game_spec, requirement_report
 from studio.state import Job, JobCancelled, ProcessLock, write_json
 from studio.unity import (RUNTIME_CONTRACT, UnityFailure, UnityRunner, bootstrap,
     ensure_live_editor, project_is_open, save_scripts, uses_live_editor, validate_files)
-from studio.failures import failure_report
+from studio.failures import failure_message, failure_report
 
 TASKS = [
     ("designer", "game_spec", []), ("developer", "scripts", ["game_spec"]),
@@ -66,6 +66,28 @@ class Supervisor:
                 if self.job:
                     self.job.event("delivery", "notification_failed", error=type(error).__name__)
 
+    def default_budget(self):
+        settings_path = self.root / "studio_settings.json"
+        if not settings_path.is_file():
+            return validate_budget(DEFAULT_CAP)
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        return validate_budget(settings.get("default_cap_usd", DEFAULT_CAP))
+
+    def set_budget(self, value, update_current=True):
+        cap = validate_budget(value)
+        update_current = (update_current and self.job is not None and
+                          self.job.data.get("status") not in ("completed", "partial", "cancelled"))
+        if update_current and cap < float(Ledger(self.job).committed):
+            raise ValueError("Budget cannot be lowered below existing charges and reservations")
+        write_json(self.root / "studio_settings.json", {"default_cap_usd": cap})
+        if update_current:
+            old = self.job.data["cap_usd"]
+            self.job.data["cap_usd"] = cap
+            if self.job.data.get("status") == "budget_stopped":
+                self.job.data["status"] = "failed"
+            self.job.event("supervisor", "budget_updated", previous_cap_usd=old, cap_usd=cap)
+        return cap
+
     def busy(self):
         return self.lock.locked() or (self.job is not None and self.job.data["status"] in ("planning", "building", "awaiting_approval", "interrupted"))
 
@@ -98,7 +120,7 @@ class Supervisor:
         if not request.strip() or len(request)>4000:
             raise ValueError("Describe a specific game in 4,000 characters or fewer")
         async with self.lock:
-            job = Job.create(request.strip(), DEFAULT_CAP, chat_id, self.root)
+            job = Job.create(request.strip(), self.default_budget(), chat_id, self.root)
             self.job = job
             job.data["android_build_required"] = bool(android)
             (self.root / "current.txt").write_text(job.data["id"], encoding="utf-8")
@@ -186,9 +208,7 @@ class Supervisor:
             except Exception as error:
                 self.fail(job,error)
                 summary = job.data.get("failure_report", {})
-                await self.notify(notify, f"Planning stopped ({summary.get('type', 'generation workflow')}): "
-                    f"{summary.get('root_cause', 'The plan could not be generated.') } "
-                    f"{summary.get('needed', 'Check the saved job and retry.')}")
+                await self.notify(notify, failure_message(summary, heading="Planning stopped."))
         return job
 
     def plan_text(self):
@@ -249,6 +269,8 @@ class Supervisor:
                 job.data.setdefault("repair_history", []).append({"type": "prior_attempt_summary",
                     "repairs": previous_repairs, "error": job.data.get("error", "")[:1000]})
             job.data["repairs"] = 0
+            job.data["implementation_repairs"] = 0
+            job.data["implementation_attempts"] = 0
             job.data["status"] = "awaiting_approval"
             job.data["error"] = ""
             job.save()
@@ -262,7 +284,12 @@ class Supervisor:
                     await self.registry.refresh()
                     service=ModelService(self.registry,job)
                     spec=load_game_spec((job.directory/"game_spec.json").read_text(encoding="utf-8"))
+                    tooling_changes = align_tooling_requirements(spec)
+                    if tooling_changes:
+                        write_json(job.directory / "game_spec.json", spec.model_dump())
+                        job.event("supervisor", "verification_routed_to_tooling", changes=tooling_changes)
                     job.data["resume_implementation"] = (job.directory / "implementation.json").is_file()
+                    job.data["resume_inputs"] = (job.directory / "ui_plan.json").is_file()
                     if spec.version == 2:
                         base_request=job.data.get("effective_request",job.data["request"])
                         for attempt in range(3):
@@ -272,6 +299,7 @@ class Supervisor:
                             effective_request=base_request
                             if pending:
                                 job.data["resume_implementation"] = False
+                                job.data["resume_inputs"] = False
                                 effective_request += "\n\nAdditional user instructions (preserve the original request too):\n" + "\n".join("- "+item["text"] for item in pending)
                                 spec=await self.agents["designer"].plan(service,effective_request)
                                 if int(job.data.get("instruction_revision",0))==revision:
@@ -290,6 +318,7 @@ class Supervisor:
                         if dimension_adjustment:
                             job.event("designer", "explicit_dimension_enforced", **dimension_adjustment)
                             job.data["resume_implementation"] = False
+                            job.data["resume_inputs"] = False
                         job.data["game_dimension"] = spec.dimension
                         spec.clarification_questions=[]
                         write_json(job.directory/"game_spec.json",spec.model_dump())
@@ -407,8 +436,6 @@ class Supervisor:
                     return []
                 self.fail(job,error)
                 summary = job.data.get("failure_report", {})
-                await self.notify(notify, f"Job {job.data['status']}: {summary.get('type', 'generation workflow')}. "
-                    f"{summary.get('root_cause', 'The job could not complete.') } "
-                    f"Repairs attempted: {summary.get('repairs_attempted', 0)}. "
-                    f"{summary.get('needed', 'Review saved diagnostics and retry.')}\n"+Ledger(job).summary())
+                await self.notify(notify, failure_message(
+                    summary, heading=f"Job {job.data['status']}.", suffix=Ledger(job).summary()))
                 return []

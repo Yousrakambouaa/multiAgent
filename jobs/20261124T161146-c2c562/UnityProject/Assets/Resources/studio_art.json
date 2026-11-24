@@ -1,0 +1,83 @@
+{
+  "assets": [
+    {
+      "id": "fox_sheet",
+      "kind": "sprite",
+      "path": "Assets/Studio/Art/fox_sheet.png",
+      "width": 1024,
+      "height": 1024,
+      "pixels_per_unit": 256,
+      "source": "OpenRouter image generation",
+      "model": "bytedance-seed/seedream-5-5",
+      "prompt": "2D game production asset. Colorful, cute cartoon forest with an original orange fox, glowing gems and simple wooden or grassy platforms. Consistent palette: orange, cream white, forest green, sky blue, gem cyan, warm brown. Original cute orange fox character sprite sheet, side view, transparent background, cartoon style. Frames for idle, run cycle, jump stretch, fall pose and landing, consistent size and alignment.. Single asset, no text, no watermark, no sprite sheet, no collage. Transparent background, centered silhouette with empty margins.",
+      "slicing": "single sprite; no sheet slicing assumed",
+      "cache_hit": false,
+      "status": "ready",
+      "requirement_ids": [
+        "R7",
+        "R13",
+        "R14",
+        "R15",
+        "R16",
+        "R17",
+        "R18",
+        "R19",
+        "R20"
+      ]
+    },
+    {
+      "id": "forest_bg",
+      "kind": "texture",
+      "path": "Assets/Studio/Art/forest_bg.png",
+      "width": 1024,
+      "height": 512,
+      "pixels_per_unit": 100,
+      "source": "OpenRouter image generation",
+      "model": "bytedance-seed/seedream-5-5",
+      "prompt": "2D game production asset. Colorful, cute cartoon forest with an original orange fox, glowing gems and simple wooden or grassy platforms. Consistent palette: orange, cream white, forest green, sky blue, gem cyan, warm brown. Colorful cartoon forest background with layered sky, distant trees and foreground foliage, suitable for parallax scrolling, no characters.. Single asset, no text, no watermark, no sprite sheet, no collage. Wide seamless atmospheric backdrop with quiet lower foreground.",
+      "slicing": "single sprite; no sheet slicing assumed",
+      "cache_hit": false,
+      "status": "ready",
+      "requirement_ids": [
+        "R8",
+        "R26"
+      ]
+    },
+    {
+      "id": "gem",
+      "kind": "sprite",
+      "path": "Assets/Studio/Art/gem.png",
+      "width": 128,
+      "height": 128,
+      "pixels_per_unit": 128,
+      "source": "OpenRouter image generation",
+      "model": "bytedance-seed/seedream-5-5",
+      "prompt": "2D game production asset. Colorful, cute cartoon forest with an original orange fox, glowing gems and simple wooden or grassy platforms. Consistent palette: orange, cream white, forest green, sky blue, gem cyan, warm brown. Glowing cartoon gem collectible, cyan faceted crystal with soft glow, transparent background.. Single asset, no text, no watermark, no sprite sheet, no collage. Transparent background, centered silhouette with empty margins.",
+      "slicing": "single sprite; no sheet slicing assumed",
+      "cache_hit": false,
+      "status": "ready",
+      "requirement_ids": [
+        "R9",
+        "R5"
+      ]
+    },
+    {
+      "id": "platform",
+      "kind": "sprite",
+      "path": "Assets/Studio/Art/platform.png",
+      "width": 256,
+      "height": 128,
+      "pixels_per_unit": 128,
+      "source": "OpenRouter image generation",
+      "model": "bytedance-seed/seedream-5-5",
+      "prompt": "2D game production asset. Colorful, cute cartoon forest with an original orange fox, glowing gems and simple wooden or grassy platforms. Consistent palette: orange, cream white, forest green, sky blue, gem cyan, warm brown. Cartoon forest platform tile, grassy top over brown earth or wood, transparent background, tileable horizontally.. Single asset, no text, no watermark, no sprite sheet, no collage. Transparent background, centered silhouette with empty margins.",
+      "slicing": "single sprite; no sheet slicing assumed",
+      "cache_hit": false,
+      "status": "ready",
+      "requirement_ids": [
+        "R9",
+        "R2"
+      ]
+    }
+  ]
+}

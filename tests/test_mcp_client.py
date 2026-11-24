@@ -263,9 +263,11 @@ class UnityMCPClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_scene_assembler_menu_is_allowed_but_arbitrary_menus_are_not(self):
         await self.client.for_agent("developer",self.root).call("execute_menu_item",{
             "menu_path":"Studio/Assemble prompt-driven scenes"})
+        await self.client.for_agent("developer",self.root).call("execute_menu_item",{
+            "menu_path":"Studio/Build Android APK"})
         with self.assertRaises(mcp.MCPError):
             await self.client.for_agent("developer",self.root).call("execute_menu_item",{"menu_path":"File/Exit"})
-        self.assertEqual(len(self.process.calls),1)
+        self.assertEqual(len(self.process.calls),2)
 
     async def test_qa_camera_access_is_limited_to_screenshots(self):
         await self.client.for_agent("qa",self.root).call("manage_camera",{

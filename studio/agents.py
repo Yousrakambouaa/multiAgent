@@ -3,9 +3,43 @@ import json
 import os
 
 from studio.schemas import AssetSpec, CodeBundle, GameSpec, LevelSpec, UIPlan
-from studio.flexible import (GameSpecV2, Implementation, PlanReview,
-                             normalize_implementation_response, validate_prompt_trace, validate_implementation)
+from studio.flexible import (GameSpecV2, GameCodeBundle, Implementation, ImplementationEdits, PlanReview,
+                             apply_implementation_edits,
+                             normalize_implementation_response, preserves_existing_probes,
+                             validate_prompt_trace, validate_implementation)
 
+
+def contract_diagnostics(error, response=None, spec=None):
+    """Bound correction context while retaining full diagnostics on disk."""
+    if hasattr(error, "errors"):
+        errors = error.errors(include_url=False, include_input=False)
+        lines = [f"{len(errors)} implementation contract errors:"]
+        lines.extend(".".join(str(part) for part in item["loc"]) + ": " + item["msg"]
+                     for item in errors[:30])
+        if len(errors) > 30:
+            lines.append("Further errors are in the saved diagnostics; apply the same schema correction throughout.")
+    else:
+        lines = [str(error)[:6000]]
+    # Pydantic may stop at a bad reference before semantic validation runs.
+    # Report independent omissions in the same correction instead of spending
+    # another full game-generation round discovering each one in sequence.
+    if spec is not None and isinstance(response, dict):
+        bundle = response.get("scenes", {})
+        scenes = bundle.get("scenes", []) if isinstance(bundle, dict) else bundle
+        if isinstance(scenes, list):
+            names = [scene.get("name") for scene in scenes if isinstance(scene, dict)]
+            if names != spec.scenes:
+                lines.append(f"Scene names/order must be {spec.scenes!r}; received {names!r}. "
+                             "Implement every planned scene, including the missing levels.")
+        probes = response.get("probes", bundle.get("probes", []) if isinstance(bundle, dict) else [])
+        if isinstance(probes, list):
+            covered = {rid for probe in probes if isinstance(probe, dict)
+                       and isinstance(probe.get("requirement_ids"), list)
+                       for rid in probe["requirement_ids"] if isinstance(rid, str)}
+            missing = {req.id for req in spec.requirements if req.verification_method == "runtime"} - covered
+            if missing:
+                lines.append("Missing behavioral probe coverage for runtime requirements: " + ", ".join(sorted(missing)))
+    return "\n".join(lines)
 
 # Model configuration keys describe tasks, not additional agent identities.
 # Keep the existing ui/scene profiles so models, fallbacks and budgets stay intact.
@@ -55,13 +89,19 @@ class GameDesigner:
             "jumping, Android, landscape, a player character, or a menu/results structure. "
             "Keep every explicit instruction; each requirement quotes an EXACT substring of the request. "
             "Split compound instructions into separate R IDs, including visual style, controls and target. "
+            "Classify observable in-game behavior as runtime, scene/script facts as structure, subjective visuals as "
+            "manual, and Studio generation/repair/retry/budget, automated Unity tests, Android APK build/install, or "
+            "Telegram delivery as pipeline work. Pipeline requirements are verified by job stages, not gameplay probes. "
             "Plan dependent T tasks for all R IDs using only designer/developer/art/qa. "
             "Record sensible defaults for unspecified details in assumptions. Never ask the user questions; "
             "leave clarification_questions empty and resolve ambiguity with the smallest reasonable assumption. "
             "Do not scope away requested systems: describe development stages and limitations within the actual job cap. "
-            "Runtime requirements need behavioral probes; visuals need human review. Actual artwork uses images or "
+            "Runtime requirements need behavioral probes; visuals need human review. APK builds, Telegram delivery "
+            "and supervisor repair/budget workflows use verification_method=structure, not gameplay probes. "
+            "Actual artwork uses images or "
             "licensed local asset_library files. Images cannot generate 3D models. Without an available model/audio "
-            "tool or licensed local asset, declare workflow=unavailable; never replace requested art with placeholders. "
+            "tool or licensed local asset, declare workflow=unavailable. Preserve explicit permission to use "
+            "placeholder assets when artwork fails; otherwise never replace requested art with placeholders. "
             "Procedural geometry may be implemented in code when appropriate to the requested design. "
             "Return exactly the provided schema, not implementation code.",
             {"request": request, "schema": GameSpecV2.model_json_schema(),
@@ -113,31 +153,79 @@ class UnityDeveloper:
         ui_data = ui.model_dump() if hasattr(ui, "model_dump") else ui
         value = {"original_request": service.job.data.get("effective_request", service.job.data["request"]),
                  "game_spec": spec.model_dump(), "ui_plan": ui_data, "assets": art,
-                 "schema": Implementation.model_json_schema()}
+                 "runtime_probe_requirements": [
+                     {"id": req.id, "behavior": req.implementation}
+                     for req in spec.requirements if req.verification_method == "runtime"],
+                 "schema": Implementation.model_json_schema(), "format_example": IMPLEMENTATION_FORMAT_EXAMPLE}
+        directory = getattr(service.job, "directory", None)
+        response_offset = 0
+        if directory is not None:
+            response_offset = max((int(path.stem.rsplit("_", 1)[-1])
+                                   for path in directory.glob("implementation_response_*.json")
+                                   if path.stem.rsplit("_", 1)[-1].isdigit()), default=0)
         # Initial contract failures happen before Unity QA has a valid plan to repair.
         # Correct them here through the same metered gateway and job cap.
+        edit_mode = False
+        previous_candidate = None
+        output_budget = 32000 if len(spec.scenes) > 2 or len(spec.requirements) > 15 else 16000
         for attempt in range(3):
-            result = await service.json("developer", FLEXIBLE_DEVELOPER_PROMPT, value, 16000)
-            directory = getattr(service.job, "directory", None)
+            result = await service.json("developer", CONTRACT_EDIT_PROMPT if edit_mode else FLEXIBLE_DEVELOPER_PROMPT,
+                                        value, 2400 if edit_mode else output_budget)
             if directory is not None:
                 from studio.state import write_json
-                write_json(directory / f"implementation_response_{attempt + 1}.json", result)
+                write_json(directory / f"implementation_response_{response_offset + attempt + 1}.json", result)
+            normalized = None
             try:
+                if edit_mode and "edits" in result:
+                    if directory is not None:
+                        write_json(directory / f"implementation_edits_{response_offset + attempt + 1}.json", result)
+                    result = apply_implementation_edits(previous_candidate, result)
+                    if directory is not None:
+                        write_json(directory / f"implementation_response_{response_offset + attempt + 1}.json", result)
                 normalized = normalize_implementation_response(result, spec)
-                return validate_implementation(spec, Implementation.model_validate(normalized))
+                if edit_mode and not preserves_existing_probes(previous_candidate, normalized):
+                    raise ValueError("Contract edits must preserve the original behavioral probes")
+                plan = validate_implementation(spec, Implementation.model_validate(normalized))
+                if hasattr(service, "record_contract_success"):
+                    service.record_contract_success("developer")
+                return plan
             except ValueError as error:
                 if hasattr(service, "record_contract_failure"):
                     service.record_contract_failure("developer")
-                diagnostics = str(error)
+                correction_candidate = normalized if isinstance(normalized, dict) else result
+                correction_diagnostics = contract_diagnostics(error, correction_candidate, spec)
+                diagnostics = str(error) + "\n" + correction_diagnostics
+                service.job.data["implementation_attempts"] = attempt + 1
+                if attempt < 2:
+                    service.job.data["implementation_repairs"] = attempt + 1
                 if directory is not None:
-                    write_json(directory / f"implementation_diagnostics_{attempt + 1}.json",
+                    write_json(directory / f"implementation_diagnostics_{response_offset + attempt + 1}.json",
                                {"error": diagnostics})
                     service.job.event("developer", "implementation_invalid", attempt=attempt + 1,
                                       error=diagnostics[:14000])
                 if attempt == 2:
                     raise ValueError("Implementation validation failed after 3 attempts: " + diagnostics) from error
-                value = {**value, "previous_implementation": result, "validation_errors": diagnostics,
-                         "correction": "Return the complete corrected Implementation. Fix the reported contract errors. "
+                if isinstance(correction_candidate, dict) and "edits" not in result:
+                    try:
+                        previous_candidate = (correction_candidate if normalized is not None
+                                              else normalize_implementation_response(result, spec))
+                    except ValueError:
+                        previous_candidate = None
+                # Patch a valid candidate instead of regenerating its scripts and
+                # scenes. Existing probes remain immutable; missing coverage can
+                # only be repaired by appending new probes.
+                edit_mode = (previous_candidate is not None
+                             and (not hasattr(error, "errors") or len(error.errors()) <= 8)
+                             and "Scene names/order must be" not in correction_diagnostics
+                             and not any(marker in correction_diagnostics for marker in (
+                                 "Unknown probe object", "Unknown probe requirement or scene", "Duplicate probe IDs")))
+                value = {**value, "previous_implementation": previous_candidate or result,
+                         "validation_errors": correction_diagnostics,
+                         "schema": ImplementationEdits.model_json_schema() if edit_mode else Implementation.model_json_schema(),
+                         "implementation_schema": Implementation.model_json_schema(),
+                         "format_example": IMPLEMENTATION_FORMAT_EXAMPLE,
+                         "correction": ("Return only the bounded edits schema. Fix all reported errors in the supplied implementation. "
+                             if edit_mode else "Return the complete corrected Implementation. Fix the reported contract errors. ") +
                          "Keep all requested behavior, requirement coverage, probe IDs and expected outcomes. "
                          "Use exact scene object IDs for probes; declare any missing gameplay objects and components. "
                          "Do not delete probes or weaken assertions to bypass validation."}
@@ -211,8 +299,8 @@ class QADebugger:
             "Read the provided files: fields may be private; expose proper gameplay methods rather than guessing members.",
             {"original_request": service.job.data.get("effective_request", service.job.data["request"]),
              "game_spec": spec.model_dump(), "compiler_errors": errors, "diagnostics": diagnostics[-12000:],
-             "current_files": current.scripts.model_dump(), "schema": CodeBundle.model_json_schema()}, 10000)
-        bundle = CodeBundle.model_validate(result)
+             "current_files": current.scripts.model_dump(), "schema": GameCodeBundle.model_json_schema()}, 10000)
+        bundle = GameCodeBundle.model_validate(result)
         by_name = {script.filename: script for script in current.scripts.scripts}
         for replacement in bundle.scripts:
             if replacement.filename not in by_name:
@@ -228,10 +316,17 @@ class QADebugger:
             "You are QA & Debugger. Compare the ORIGINAL user request, every GameSpec requirement, implementation "
             "and behavioral probes. Report omitted prompt instructions, missing R IDs and concrete concerns. "
             "Check genre, dimension, camera, controls, progression, assets and UI. Compilation is not gameplay evidence. "
-            "This is a design review, not proof that any test passed. Do not ask the user for details; resolve optional gaps "
+            "Use the supplied trusted verification_evidence and pipeline phase. Report concrete code/scene defects only. "
+            "APK building and Telegram delivery happen AFTER this review; do not report them as missing implementation. "
+            "Never demand that supervisor repair cycles have already happened. Unverified visual polish or device performance "
+            "requires manual review and is not a code defect. Do not raise speculative concerns merely because something is unverified. "
+            "Studio.Runtime.TouchPad and the Input System package are supplied by this project. Object positions are WORLD "
+            "coordinates; parenting preserves world positions. Unnamed Unity layers 0-31 are valid numeric layers. "
+            "This review is not independent proof of test success. Do not ask the user for details; resolve optional gaps "
             "using the recorded assumptions. Return only the schema fields.",
             {"original_request": service.job.data.get("effective_request", service.job.data["request"]), "game_spec": spec.model_dump(),
-             "implementation": plan.model_dump(), "schema": PlanReview.model_json_schema()}, 3000))
+             "implementation": plan.model_dump(), "verification_evidence": getattr(service, "verification_evidence", {}),
+             "schema": PlanReview.model_json_schema()}, 3000))
 
     async def repair_implementation(self, service, spec, plan, diagnostics):
         caller = service.json
@@ -244,6 +339,7 @@ class QADebugger:
             raise ValueError("Unknown QA backend")
         original_probes = [probe.model_dump() for probe in plan.probes]
         rejection = ""
+        output_budget = 32000 if len(spec.scenes) > 2 or len(spec.requirements) > 15 else 16000
         for attempt in range(3):
             result = await caller("qa", FLEXIBLE_DEVELOPER_PROMPT +
                 " You are QA & Debugger. Repair the implementation using actual diagnostics. "
@@ -256,15 +352,20 @@ class QADebugger:
                  "implementation": plan.model_dump(), "diagnostics": diagnostics,
                  "previous_contract_error": rejection,
                  "required_probe_ids_and_contract": original_probes,
-                 "schema": Implementation.model_json_schema()}, 16000)
-            normalized = normalize_implementation_response(result, spec)
-            repaired = validate_implementation(spec, Implementation.model_validate(normalized))
-            if [p.model_dump() for p in repaired.probes] != original_probes:
-                rejection = "The previous answer changed behavioral probes. Restore the required probes exactly and repair only code/scenes."
-            elif repaired.model_dump() == plan.model_dump():
-                rejection = "The previous answer made no implementation changes. Apply a concrete code or scene repair for the diagnostics."
-            else:
-                return repaired
+                 "schema": Implementation.model_json_schema()}, output_budget)
+            try:
+                normalized = normalize_implementation_response(result, spec)
+                repaired = validate_implementation(spec, Implementation.model_validate(normalized))
+                if [p.model_dump() for p in repaired.probes] != original_probes:
+                    rejection = "The previous answer changed behavioral probes. Restore the required probes exactly and repair only code/scenes."
+                elif repaired.model_dump() == plan.model_dump():
+                    rejection = "The previous answer made no implementation changes. Apply a concrete code or scene repair for the diagnostics."
+                else:
+                    if hasattr(service, "record_contract_success"):
+                        service.record_contract_success("qa")
+                    return repaired
+            except ValueError as error:
+                rejection = contract_diagnostics(error, result, spec)
             if attempt == 2 or not hasattr(service, "record_contract_failure"):
                 raise ValueError("QA repair contract failed after bounded model retries: " + rejection)
             service.record_contract_failure("qa")
@@ -300,6 +401,13 @@ def available_library():
 
 FLEXIBLE_DEVELOPER_PROMPT = """You are the Unity Developer implementing the original prompt in Unity 6.
 Return an Implementation with scripts:{scripts:[{filename,content}]}, scenes:{version:2,title,dimension,orientation,scenes:[...],materials:[...]}, and behavioral probes.
+Every ID in runtime_probe_requirements must be covered by at least one valid probe. Do not create gameplay probes for pipeline requirements.
+Use at most 32 scripts. Script entries have ONLY filename and content; attach requirement_ids to objects and probes.
+Component entries have ONLY type and properties. properties is a LIST of {name,kind,value}, never a dictionary
+and never flattened fields on the component. Example: {"type":"UnityEngine.Camera","properties":[
+{"name":"orthographic","kind":"bool","value":"true"},{"name":"orthographicSize","kind":"float","value":"7"}]}.
+Objects require BOTH id (safe identifier without spaces) and name (display text). No object kind field.
+probes, implemented_requirement_ids and limitations belong at the TOP LEVEL, alongside scripts and scenes.
 Do not replace requested mechanics, genre, dimension, camera, controls or art. List unfinished R IDs in limitations.
 Scene object positions are WORLD coordinates even when parent is set; the scene builder preserves world position while parenting.
 For a child anchor, set its world position to the parent's world position plus the intended local offset.
@@ -356,4 +464,30 @@ Property assertions may read a public field, property, or zero-argument state ge
 position_changed(object_id,value=min distance), scene(value=scene name).
 Test actual controls, movement, collisions/progression and win conditions, not simply labels or configuration.
 Tie probes and objects to R IDs. Do not claim verification; only Unity execution can produce evidence.
+"""
+
+
+IMPLEMENTATION_FORMAT_EXAMPLE = {
+    "scripts": {"scripts": [{"filename": "GameController.cs", "content": "<complete C# source>"}]},
+    "scenes": {"version": 2, "title": "<game title>", "dimension": "<spec dimension>",
+               "orientation": "<spec orientation>", "materials": [],
+               "scenes": [{"name": "<exact spec scene name>", "objects": [
+                   {"id": "mainCamera", "name": "Main Camera", "position": [0, 0, -10],
+                    "components": [{"type": "UnityEngine.Camera", "properties": [
+                        {"name": "orthographic", "kind": "bool", "value": "true"}]}]}]}]},
+    "probes": "<runtime probe array matching the schema, using declared object IDs>",
+    "implemented_requirement_ids": ["R1"], "limitations": [],
+}
+
+
+CONTRACT_EDIT_PROMPT = """Repair the supplied Unity implementation with minimal JSON data edits.
+Return ONLY {"edits":[{"op":"add|replace|remove","path":"/scenes/... or /scripts/... or /probes/-","value":...}]}.
+Use standard JSON Pointer paths into previous_implementation. Array indices start at zero.
+For remove, omit value. For add/replace, provide the complete value for that path.
+Example: remove an unused empty property with {"op":"remove","path":"/scenes/scenes/0/objects/1/components/0/properties/2"}.
+Do not regenerate the entire game for a small format defect. Fix every reported scene omission and reference error.
+Keep gameplay, controls, assets and component classes. Existing probes are immutable: never replace, edit, reorder
+or remove them. If validation lists uncovered runtime requirement IDs, append complete new probes only with
+an add operation at /probes/- using the complete RuntimeProbe schema. Do not weaken assertions or claim untested behavior.
+implemented_requirement_ids, limitations and evidence are not editable. The complete implementation is validated again.
 """

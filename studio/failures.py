@@ -84,19 +84,28 @@ def model_quality_report(job):
 def failure_type(error):
     text = str(error).casefold()
     stage = getattr(error, "stage", "")
+    if hasattr(error, "attempts") and hasattr(error, "provider"):
+        return "AI provider/model failure"
+    if hasattr(error, "operation") and hasattr(error, "diagnostic"):
+        return "AI provider catalog failure"
+    if "authentication failed" in text or "api key" in text:
+        return "provider configuration"
     if "qa review" in text or "gameplay blocker" in text:
         return "Unity QA finding"
     if any(marker in text for marker in ("429", "rate limit", "timed out", "timeout", "temporarily unavailable", "502", "503", "504")):
         return "temporary provider or service failure"
-    if "api key" in text or "provider" in text and "configured" in text:
+    if "provider" in text and "configured" in text:
         return "provider configuration"
+    if getattr(error, "owner", "") == "infrastructure" and stage != "android":
+        return "Unity or machine environment"
     if stage in ("compile", "compilation") or re.search(r"\bCS\d{4}\b", text):
         return "Unity C# compilation"
     if stage in ("EditMode", "PlayMode", "assembly"):
         return "Unity scene or gameplay verification"
     if stage == "android":
         return "Android APK build"
-    if "repair contract" in text or "behavioral probes" in text:
+    if any(marker in text for marker in ("repair contract", "behavioral probes", "implementation validation",
+                                         "validation errors for implementation", "validation error for implementation")):
         return "AI agent output contract"
     if "budget" in text or "cap" in text and "usd" in text:
         return "job budget"
@@ -108,18 +117,66 @@ def failure_type(error):
 def failure_report(error, job):
     kind = failure_type(error)
     stage = getattr(error, "stage", "") or job.data.get("stage", "generation")
+    if kind == "AI provider/model failure":
+        stage = f"{getattr(error, 'role', 'agent')} model request"
+    elif kind == "AI provider catalog failure":
+        stage = "provider model discovery"
     if kind == "Unity QA finding" and stage in ("api_call", "generation"):
         stage = "preflight_qa"
     report = job.data.get("failure_report") or {}
+    for key in ("provider", "agent_role", "provider_attempts"):
+        report.pop(key, None)
     report.update({"type": kind, "stage": stage,
                    "repairs_attempted": int(job.data.get("repairs", 0)),
                    "root_cause": "The bounded generation or verification attempt could not pass its checks."})
-    if kind == "temporary provider or service failure":
-        report["root_cause"] = "The selected provider did not return a usable response before the retry limit."
-        report["needed"] = "Check provider availability, quota, and model access, then retry the saved job."
+    report["repairs_attempted"] += int(job.data.get("implementation_repairs", 0))
+    if kind == "AI provider/model failure":
+        attempts = getattr(error, "attempts", [])
+        report["provider"] = getattr(error, "provider", "unknown")
+        report["agent_role"] = getattr(error, "role", "unknown")
+        report["provider_attempts"] = attempts
+        if getattr(error, "fallback_blocked", False):
+            report["root_cause"] = getattr(error, "reason", None) or "The provider rejected the configured credentials or account access."
+            if "credential" in report["root_cause"].casefold():
+                report["needed"] = "Check the selected provider key/account permissions. Changing models will not fix a credential rejection."
+            else:
+                report["needed"] = "Check provider billing or quota. This provider-specific rejection stopped model fallback."
+        elif attempts:
+            report["root_cause"] = "No eligible model returned a usable response for this agent request."
+            report["needed"] = ("The job stopped before Unity because its bounded model attempts were exhausted. "
+                                "Review the model/API errors below. Studio tried eligible alternatives without "
+                                "exceeding the job budget; if none were available, only the configured model could run.")
+        else:
+            report["root_cause"] = getattr(error, "reason", None) or str(error)
+            report["needed"] = ("No eligible model request was made. Check the provider model catalog, JSON "
+                                "support, model configuration and pricing restrictions, then retry.")
+    elif kind == "AI provider catalog failure":
+        report["provider"] = getattr(error, "provider", "unknown")
+        report["root_cause"] = str(error)
+        report["needed"] = ("The provider model catalog could not be loaded, so no Unity work or agent request "
+                            "started. Check provider availability, key access and quota, then retry.")
+    elif kind == "provider configuration":
+        report["root_cause"] = str(error)
+        report["needed"] = "Check the selected provider key/configuration. Changing models cannot fix a rejected API key."
+    elif kind == "temporary provider or service failure":
+        report["root_cause"] = str(error)
+        report["needed"] = "Check the provider's status, quota and model access; retry the saved job after it recovers."
+    elif kind == "AI agent output contract":
+        lines = str(error).splitlines()
+        report["root_cause"] = "\n".join(lines[:7])[:1600]
+        report["needed"] = ("Generated data failed the implementation contract before Unity scene assembly. "
+                            "Adding API credits does not fix this schema error. The responses and exact diagnostics "
+                            "are saved as implementation_response_*.json and implementation_diagnostics_*.json; "
+                            "the job is preserved for retry.")
+    elif kind == "job budget":
+        report["root_cause"] = str(error)
+        report["needed"] = "No further model request was started beyond the job cap. Review the reservation details, reduce the request size, or explicitly raise the per-job cap."
     elif kind == "Android APK build":
-        report["root_cause"] = "Unity did not produce a verified APK."
-        report["needed"] = "Install/enable Unity Android Build Support (SDK, NDK, and OpenJDK), free at least 5 GB, then retry."
+        report["root_cause"] = "Android packaging stopped: " + str(error)[:1400]
+        report["needed"] = "Review the named blocker, android.json and the Unity build log. Saved source and test evidence are preserved for a build retry."
+    elif kind == "Unity or machine environment":
+        report["root_cause"] = str(error)[:1800]
+        report["needed"] = "Restore the matching Unity project/bridge or resolve the named machine issue. Saved code and art are preserved; this is not an API-credit or generated-C# diagnosis."
     elif kind == "Unity scene or gameplay verification":
         report["root_cause"] = "A Unity scene or gameplay check still failed after bounded repair attempts."
         report["needed"] = "Review the local validation report and Unity diagnostics, then retry after correcting the remaining issue."
@@ -129,11 +186,28 @@ def failure_report(error, job):
     elif kind == "Unity C# compilation":
         report["root_cause"] = "Generated C# did not compile after bounded repair attempts."
         report["needed"] = "Review compiler diagnostics in the saved job and retry after fixing the reported code issue."
-    elif kind == "AI agent output contract":
-        report["root_cause"] = "An AI agent returned a repair that violated the implementation contract."
-        report["needed"] = "The job is preserved; retry after model selection has recorded the failed response and can choose a different suitable model."
     else:
         report["needed"] = "Review the saved job diagnostics and retry after resolving the reported blocker."
     job.data["failure_report"] = report
     return (f"Job stopped during {stage}: {report['type']}. {report['root_cause']} "
             f"Repairs attempted: {report['repairs_attempted']}. {report['needed']}")
+
+
+def failure_message(report, heading="", suffix=""):
+    message = (heading + " " if heading else "") + (
+        f"Job stopped during {report.get('stage', 'generation')}: "
+        f"{report.get('type', 'generation workflow')}. "
+        f"{report.get('root_cause', 'The job could not complete.')} "
+        f"Repairs attempted: {report.get('repairs_attempted', 0)}. "
+        f"{report.get('needed', 'Review saved diagnostics and retry.')}")
+    attempts = report.get("provider_attempts", [])
+    if attempts:
+        message += "\nModel/API attempts:"
+        for attempt in attempts:
+            status = f"HTTP {attempt['status']}" if attempt.get("status") is not None else attempt.get("kind", "request")
+            message += f"\n- {attempt.get('model', 'unknown model')} ({status}): {attempt.get('reason', 'no details')}"
+            if attempt.get("request_id"):
+                message += f" [request ID: {attempt['request_id']}]"
+    if suffix:
+        message += "\n" + suffix
+    return message

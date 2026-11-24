@@ -120,6 +120,7 @@ public static class UniversalSceneBuilder {
                 if(type!=typeof(float) && type!=typeof(double)) throw new Exception("Expected a floating-point property");
                 return ConvertValue(data.value,type);
             case "int":
+                if(type==typeof(LayerMask)) return (LayerMask)int.Parse(data.value,CultureInfo.InvariantCulture);
                 if(type!=typeof(int) && type!=typeof(long)) throw new Exception("Expected an integer property");
                 return ConvertValue(data.value,type);
             case "bool":
@@ -269,8 +270,8 @@ public static class UniversalSceneBuilder {
             throw new Exception("Duplicate material IDs");
         foreach(var scene in bundle.scenes) {
             var source=scene.objects ?? Array.Empty<ObjectData>();
-            if(source.Select(o=>o.id).Distinct().Count()!=source.Length || source.Select(o=>o.name).Distinct().Count()!=source.Length)
-                throw new Exception("Scene "+scene.name+" has duplicate object IDs or names");
+            if(source.Select(o=>o.id).Distinct().Count()!=source.Length)
+                throw new Exception("Scene "+scene.name+" has duplicate object IDs");
             var byId=source.ToDictionary(o=>o.id,o=>o);
             if(!source.Any(o=>(o.components ?? Array.Empty<ComponentData>()).Any(c=>Resolve(c.type)==typeof(Camera))))
                 throw new Exception("Scene "+scene.name+" must explicitly declare a Camera");
@@ -397,6 +398,7 @@ public static class UniversalSceneBuilder {
                 if(projectDimension==null || projectDimension.dimension!=bundle.dimension)
                     throw new Exception("Scene dimension does not match the Unity project dimension selected before Editor startup.");
             }
+            ValidateBundle(bundle);
             // The base project uses a 2D-only URP renderer. New v2 projects use
             // built-in rendering for both 2D sprites and 3D lit materials.
             GraphicsSettings.defaultRenderPipeline=null;
@@ -405,7 +407,6 @@ public static class UniversalSceneBuilder {
             QualitySettings.SetQualityLevel(previous,false);
             Directory.CreateDirectory("Assets/Studio/Art"); Directory.CreateDirectory("Assets/Studio/Scenes"); Directory.CreateDirectory("Assets/Studio/Prefabs");
             Tags(bundle); ImportArt(); var materials=Materials(bundle); var paths=new List<string>();
-            ValidateBundle(bundle);
             foreach(var scene in bundle.scenes) {
                 EditorSceneManager.NewScene(NewSceneSetup.EmptyScene,NewSceneMode.Single);
                 var map=new Dictionary<string,GameObject>();

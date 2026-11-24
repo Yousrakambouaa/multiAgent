@@ -1,7 +1,45 @@
 """Provider settings shared by model discovery and the existing metered client."""
 import os
+import re
 
 from studio import openrouter
+
+
+def redact_provider_message(message):
+    message = str(message)
+    for key in ("OPENROUTER_API_KEY", "DAHL_API_KEY", "TELEGRAM_BOT_TOKEN"):
+        secret = os.environ.get(key, "").strip()
+        if secret:
+            message = message.replace(secret, "[redacted]")
+    message = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [redacted]", message)
+    message = re.sub(r"(?i)(https?://)[^/@\s]+:[^/@\s]+@", r"\1[redacted]@", message)
+    return message[:1000]
+
+
+def provider_response_message(response):
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
+    error = data.get("error") if isinstance(data, dict) else None
+    if isinstance(error, dict):
+        message = error.get("message") or error.get("detail") or error.get("type")
+        code = error.get("code")
+        error_type = error.get("type")
+        metadata = []
+        if code is not None:
+            metadata.append(f"provider code: {code}")
+        if error_type and error_type != message:
+            metadata.append(f"type: {error_type}")
+        if metadata:
+            message = f"{message or 'provider rejected request'} ({'; '.join(metadata)})"
+    elif isinstance(error, str):
+        message = error
+    else:
+        message = ""
+    if not message:
+        message = response.text.strip()[:400] or "empty response body"
+    return redact_provider_message(message)
 
 
 class AIProvider:

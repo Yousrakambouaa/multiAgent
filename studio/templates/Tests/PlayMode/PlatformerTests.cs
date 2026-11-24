@@ -101,6 +101,6 @@ public class PlatformerTests {
         Assert.IsTrue(File.Exists(Path.Combine(folder,"preview.png")));
     }
     [UnityTearDown] public IEnumerator NoUnexpectedRuntimeErrors() {
-        Time.timeScale=1; TouchPad.Reset(); LogAssert.NoUnexpectedReceived(); yield return null;
+        Time.timeScale=1; TouchPad.ResetState(); LogAssert.NoUnexpectedReceived(); yield return null;
     }
 }

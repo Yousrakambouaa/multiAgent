@@ -2,6 +2,7 @@ import base64
 import hashlib
 import io
 import json
+import re
 import shutil
 from types import SimpleNamespace
 
@@ -24,6 +25,8 @@ class ArtDesigner:
         result = {}
         manifest = []
         reference = None
+        rejected_requests = getattr(service, "image_request_failures", {})
+        service.image_request_failures = rejected_requests
         for asset in spec.required_assets:
             service.job.check_cancelled()
             prompt = (f"2D game production asset. {spec.art_style}. Consistent palette: {', '.join(spec.palette)}. "
@@ -36,18 +39,24 @@ class ArtDesigner:
             provenance_path = cached.with_suffix(".json")
             provenance = {}
             image = None
+            failures = []
             if cached.exists() and provenance_path.exists():
                 image = Image.open(cached).convert("RGBA")
                 provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
                 provenance["cache_hit"] = True
             else:
-                for model in service.registry.candidates("art"):
+                for model in service.registry.candidates("art", transparent=asset.transparent):
                     if service.job.data.get("image_service_blocked"):
                         break
                     try:
-                        endpoint, ceiling = service.registry.image_endpoint(model)
+                        endpoint, ceiling = service.registry.image_endpoint(model, transparent=asset.transparent)
                         supported = endpoint["supported_parameters"]
+                        request_kind = (model, asset.transparent, bool(reference and "input_references" in supported))
+                        if request_kind in rejected_requests:
+                            failures.append(rejected_requests[request_kind])
+                            continue
                         if asset.transparent and "background" not in supported:
+                            failures.append(f"{model}: transparent backgrounds are unsupported")
                             continue
                         payload = {"model": model, "prompt": prompt, "n": 1,
                                    "provider": {"order": [endpoint["provider_tag"]], "allow_fallbacks": False}}
@@ -79,12 +88,19 @@ class ArtDesigner:
                     except BudgetExceeded:
                         if service.job.data.get("budget_halted"):
                             raise
-                        break
+                        failures.append("Image request did not fit the remaining job budget")
+                        continue
                     except JobCancelled:
                         raise
                     except Exception as error:
                         image = None
                         provenance = {}
+                        detail = str(error)[:700]
+                        failures.append(detail)
+                        if (isinstance(error, ServiceRejected) and error.status in (400, 404, 422)
+                                or isinstance(error, ValueError) and "opaque image" in detail):
+                            rejected_requests[(model, asset.transparent,
+                                bool(reference and "input_references" in supported))] = detail
                         service.job.event("art", "art_generation_failed", model=model,
                                           error=str(error)[:500] if isinstance(error,RuntimeError) else type(error).__name__)
                         if isinstance(error,ServiceRejected) and error.status in (401,402,403):
@@ -94,8 +110,12 @@ class ArtDesigner:
                 if image is None:
                     if strict:
                         manifest.append(dict(id=asset.id, kind=asset.kind, status="unavailable", path="",
-                            source="unavailable", reason="Image provider failed or budget/capability unavailable",
+                            source="unavailable", reason="; ".join(dict.fromkeys(failures)) or
+                                service.job.data.get("image_service_blocked") or
+                                "No compatible image endpoint supports this asset's requested format/transparency",
                             requirement_ids=asset.requirement_ids))
+                        service.job.event("art", "asset_unavailable", asset=asset.id, reason=manifest[-1]["reason"])
+                        write_json(service.job.directory / "art_manifest.json", manifest)
                         continue
                     image = procedural(asset.kind, spec.palette)
                     provenance = {"source": "original procedural fallback", "license": "project-owned generated geometry",
@@ -117,6 +137,7 @@ class ArtDesigner:
                                  width=size[0], height=size[1], pixels_per_unit=asset.pixels_per_unit, **provenance))
             result[asset.kind] = target.relative_to(project).as_posix()
             service.job.event("art", "asset_saved", asset=asset.id, source=provenance["source"])
+            write_json(service.job.directory / "art_manifest.json", manifest)
         write_json(service.job.directory / "art_manifest.json", manifest)
         return result
 
@@ -139,6 +160,20 @@ async def create_flexible_art(designer, service, spec, project):
         for entry in manifest:
             entry["status"] = "ready" if entry.get("path") else "unavailable"
             entry["requirement_ids"] = by_id[entry["id"]].requirement_ids
+        request = service.job.data.get("effective_request", service.job.data.get("request", ""))
+        if allows_placeholder_art(request):
+            for entry in manifest:
+                if entry["status"] == "ready":
+                    continue
+                asset = by_id[entry["id"]]
+                target = project / "Assets/Studio/Art" / (asset.id + ".png")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                placeholder_image(asset, spec.palette).save(target, "PNG")
+                entry.update(status="ready", path=target.relative_to(project).as_posix(),
+                             source="original procedural placeholder", is_placeholder=True,
+                             license="project-owned generated geometry", width=asset.width, height=asset.height,
+                             pixels_per_unit=asset.pixels_per_unit)
+                service.job.event("art", "placeholder_saved", asset=asset.id, reason=entry.get("reason", ""))
     suffixes = {"model": {".fbx", ".obj"}, "prefab": {".prefab"}, "audio": {".wav", ".ogg"},
                 "animation": {".anim"}, "sprite": {".png", ".jpg"}, "texture": {".png", ".jpg"}}
     for asset in spec.required_assets:
@@ -169,6 +204,41 @@ async def create_flexible_art(designer, service, spec, project):
         service.job.event("art", "asset_" + entry["status"], asset=asset.id)
     write_json(service.job.directory / "art_manifest.json", manifest)
     return {entry["id"]: entry for entry in manifest}
+
+
+def asset_summary(manifest):
+    ready = [entry for entry in manifest if entry.get("status") == "ready"]
+    missing = [entry for entry in manifest if entry.get("status") != "ready"]
+    lines = [f"Art Designer: {len(ready)} assets ready, {len(missing)} unavailable."]
+    lines.extend(f"- Ready: {entry['id']} ({entry.get('source', 'imported')})" for entry in ready)
+    lines.extend(f"- Unavailable: {entry['id']}: {entry.get('reason', 'No usable asset produced')}" for entry in missing)
+    return "\n".join(lines)
+
+
+def allows_placeholder_art(request):
+    """Require explicit user permission; never silently replace custom artwork."""
+    for clause in re.split(r"[.!?;\n]", str(request)):
+        if not re.search(r"\bplaceholders?\b", clause, re.I):
+            continue
+        if re.search(r"\b(?:no|not|never|without|avoid|forbid|disallow|don't|do not)\b", clause, re.I):
+            continue
+        if re.search(r"\b(?:generate|create|use|allow|accept|provide|include)\b", clause, re.I):
+            return True
+    return False
+
+
+def placeholder_image(asset, palette):
+    """An explicitly permitted, visibly simple sprite/texture, with honest provenance."""
+    colors = palette or ["#203044", "#62D49F", "#FFD166", "#F4F7FB"]
+    foreground = colors[1 % len(colors)]
+    image = Image.new("RGBA", (asset.width, asset.height), (0, 0, 0, 0) if asset.transparent else colors[0])
+    draw = ImageDraw.Draw(image)
+    width, height = asset.width, asset.height
+    margin = max(2, min(width, height) // 10)
+    draw.rounded_rectangle((margin, margin, width - margin, height - margin),
+                           radius=min(width, height) // 5, fill=foreground,
+                           outline=colors[-1], width=max(2, min(width, height) // 32))
+    return image
 
 
 def procedural(kind, palette):

@@ -48,6 +48,8 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
     def populate(self):
         self.registry.models = {mid: {"pricing": {"prompt": "0.00000002", "completion": "0.00000002"},
                                       "supported_parameters": ["response_format", "reasoning"],
+                                      "architecture": {"modality":"text->text","input_modalities":["text"],
+                                                       "output_modalities":["text"]},
                                       "context_length": 32768}
                                 for mids in self.registry.roles.values() for mid in mids}
 
@@ -116,7 +118,9 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             registry = Registry()
         registry.roles = {"designer": ["router/paid", "router/other", "router/free:free"], "art": []}
         models = [{"id": mid, "pricing": {"prompt": "0", "completion": "0"},
-                   "supported_parameters": ["response_format"], "context_length": 32768}
+                   "supported_parameters": ["response_format"], "context_length": 32768,
+                   "architecture": {"modality":"text->text","input_modalities":["text"],
+                                    "output_modalities":["text"]}}
                   for mid in registry.roles["designer"]]
 
         def handle(request):

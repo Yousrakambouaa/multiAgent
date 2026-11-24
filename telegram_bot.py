@@ -11,6 +11,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 
 from studio.config import ROOT, safe_path
 from studio.costs import Ledger
+from studio.failures import failure_message
 from studio.state import ProcessLock, now, write_json
 from studio.supervisor import Supervisor
 from studio.request_validation import NOISE
@@ -20,7 +21,7 @@ HELP_TEXT=("Unity Game Studio builds prompt-driven 2D and 3D prototypes and repo
     "/create <game description> — create a plan\n/plan — inspect the plan\n/approve — start Unity generation\n"
     "/status — progress\n/cancel — stop a job\n/budget — spending\n/result — project, report and preview\n\n"
     "Example: /create A woodland platformer with jumping, coins and patrolling enemies. "
-    "The default job cap is $2. Complex games or unavailable assets may produce a partial result with explicit limitations.")
+    "Use /budget to inspect spending or /budget 10 to set the API cap. Complex games may produce a partial result with explicit limitations.")
 
 
 def authorized(update):
@@ -82,8 +83,21 @@ async def plan(update,context):
 
 async def budget(update,context):
     if not await guard(update): return
-    job=supervisor(context).job
-    await update.effective_message.reply_text(Ledger(job).summary() if job else "No job. Default cap: $2; configurable with STUDIO_JOB_BUDGET_USD.")
+    studio=supervisor(context)
+    args=getattr(context,"args",[])
+    if args:
+        if len(args)!=1:
+            await update.effective_message.reply_text("Use /budget to inspect spending or /budget 10 to set the current and future job cap.")
+            return
+        try:
+            cap=studio.set_budget(args[0])
+        except ValueError as error:
+            await update.effective_message.reply_text(str(error)); return
+        await update.effective_message.reply_text(f"API cap set to ${cap:g} for new games and the current resumable job. Use /approve to retry a stopped job.")
+        return
+    job=studio.job
+    await update.effective_message.reply_text((Ledger(job).summary() if job else "No job.") +
+        "\nUse /budget <dollars> to change the cap (up to $50 by default).")
 
 
 async def cancel(update,context):
@@ -101,9 +115,13 @@ async def deliver(bot,chat_id,job):
     if job.data["status"] not in ("completed", "partial"):
         report=job.data.get("failure_report") or {}
         if report:
-            await bot.send_message(chat_id, f"Job stopped during {report.get('stage', 'generation')}: "
-                f"{report.get('type', 'generation workflow')}. {report.get('root_cause', 'The job could not complete.')} "
-                f"Repairs attempted: {report.get('repairs_attempted', 0)}. {report.get('needed', 'Review the saved job and retry.')}")
+            text = failure_message(report)
+            while text:
+                end = min(len(text), 3500)
+                while len(text[:end].encode("utf-16-le")) // 2 > 3500:
+                    end -= 1
+                await bot.send_message(chat_id, text[:end])
+                text = text[end:]
         else:
             await bot.send_message(chat_id,"No completed result yet. Use /status to inspect the saved job.")
         return

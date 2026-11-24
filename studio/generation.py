@@ -1,6 +1,8 @@
 """Version-two execution tools owned by the existing five-agent supervisor."""
 import json
 import re
+import asyncio
+from contextlib import suppress
 
 from studio.artifacts import package
 from studio.costs import Ledger
@@ -11,6 +13,23 @@ from studio.state import write_json
 from studio.unity import UnityFailure, UnityRunner, compiler_errors
 from studio.coordination import finish_stage, invalidate_validation, update_work_items
 from studio.failures import model_quality_report
+from studio.assets import asset_summary
+
+
+async def with_progress(supervisor, notify, operation, message, interval=30):
+    """Keep a long metered operation visible and cancel it with its caller."""
+    task = asyncio.ensure_future(operation)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=interval)
+            if done:
+                return await task
+            await supervisor.notify(notify, message)
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 _PUBLIC_COMPONENT_FIELD = re.compile(
@@ -118,6 +137,15 @@ def normalize_ground_check_anchors(plan):
                 continue
             anchor = objects.get(ground_reference.value.split(":", 1)[0].casefold())
             if anchor is None:
+                continue
+            script_names = {component.type.rsplit(".", 1)[-1].casefold() for component in actor.components}
+            if any(script.filename[:-3].casefold() in script_names and "Physics2D.Raycast" in script.content
+                   for script in plan.scripts.scripts):
+                # Raycasts require an origin above the floor, unlike overlap
+                # circles. Moving every authored sensor below the feet can make
+                # rays start inside the ground and reject all zero-distance hits.
+                # Preserve their authored origins and let real physics tests/QA
+                # diagnose them instead of imposing overlap-circle geometry.
                 continue
             collider = next((component for component in actor.components
                 if component.type.rsplit(".", 1)[-1] in ("BoxCollider2D", "CapsuleCollider2D", "CircleCollider2D")), None)
@@ -354,7 +382,7 @@ async def build_flexible(supervisor, service, spec, project, notify, android):
         # Keep the legacy menu/touch-specific UIPlan on the v1 path.
         await supervisor.notify(notify, "Designer: planning UI for the requested game and target.")
         ui_path = job.directory / "ui_plan.json"
-        if job.data.get("resume_implementation") and ui_path.is_file():
+        if (job.data.get("resume_implementation") or job.data.get("resume_inputs")) and ui_path.is_file():
             ui = json.loads(ui_path.read_text(encoding="utf-8"))
         else:
             ui = await supervisor.agents["designer"].plan_ui(service, spec)
@@ -367,59 +395,41 @@ async def build_flexible(supervisor, service, spec, project, notify, android):
             art = {}
         else:
             await supervisor.notify(notify, "Art Designer: generating or importing requested assets; unavailable assets will be listed.")
-            art = await supervisor.agents["art"].create(service, spec, project)
+            art = await with_progress(supervisor, notify,
+                supervisor.agents["art"].create(service, spec, project),
+                "Art Designer: asset generation is still running. Scene assembly follows implementation and compilation.")
         manifest = json.loads((job.directory / "art_manifest.json").read_text(encoding="utf-8"))
+        await supervisor.notify(notify, asset_summary(manifest))
         write_json(project / "Assets/Resources/studio_art.json", {"assets": manifest})
         finish_stage(job, "sprites", "passed" if all(a["status"] == "ready" for a in manifest) else "partial", "art_manifest.json")
-        await supervisor.notify(notify, "Developer: implementing the requested scripts, scenes, components and gameplay checks.")
+        await supervisor.notify(notify, "Developer: generating scripts, scene data and gameplay checks. "
+                                "Unity objects appear after this data validates and C# compiles.")
         if resuming:
             plan = Implementation.model_validate_json((job.directory / "implementation.json").read_text(encoding="utf-8"))
             for script in plan.scripts.scripts:
                 script.content = safe_path(project / "Assets/Studio/Generated", script.filename).read_text(encoding="utf-8")
             validate_implementation(spec, plan)
         else:
-            plan = await supervisor.agents["developer"].implement(service, spec, ui, art)
+            plan = await with_progress(supervisor, notify,
+                supervisor.agents["developer"].implement(service, spec, ui, art),
+                "Developer: still generating or correcting the implementation. "
+                "Scene assembly has not started yet; /status shows the latest stage.")
         grounding_fixes = {"anchors": normalize_ground_check_anchors(plan),
                            "collider_sizes": normalize_implicit_2d_box_collider_sizes(plan),
                            "contact_queries": normalize_ground_contact_queries(plan)}
         if grounding_fixes["anchors"] or grounding_fixes["contact_queries"]:
             job.data["repairs"] += 1
             job.event("qa", "grounding_repaired", **grounding_fixes)
-        cached_review_path = job.directory / "qa_review.json"
-        if resuming and cached_review_path.is_file():
-            # Resume verification can proceed from saved code without another
-            # paid/free model call. Unity stages below provide fresh evidence;
-            # the saved review is reported as pre-repair context only.
-            review = PlanReview.model_validate_json(cached_review_path.read_text(encoding="utf-8"))
-            job.event("qa", "saved_review_reused", fresh_unity_verification_required=True)
-            if grounding_fixes["anchors"] or grounding_fixes["contact_queries"]:
-                report["limitations"].append("QA design review predates deterministic grounding repairs; fresh Unity checks determine gameplay status.")
-        else:
-            review = await supervisor.agents["qa"].review_implementation(service, spec, plan)
-            write_json(cached_review_path, review.model_dump())
-        report["qa_review"] = review.model_dump()
-        report["limitations"].extend(review.missing_prompt_instructions + review.concerns)
-        report["limitations"].extend("QA identified incomplete requirement " + r for r in review.missing_requirement_ids)
-        preflight_round = 0
-        while (review.missing_requirement_ids or review.missing_prompt_instructions or review.concerns):
-            if preflight_round >= 3 or job.data["repairs"] >= 3:
-                break
-            job.check_cancelled()
-            preflight_round += 1
-            job.data["repairs"] += 1
-            job.event("qa", "preflight_repair", round=preflight_round,
-                      missing_requirement_ids=review.missing_requirement_ids,
-                      missing_prompt_instructions=review.missing_prompt_instructions,
-                      concerns=review.concerns)
-            plan = await supervisor.agents["qa"].repair_implementation(service, spec, plan,
-                "Resolve the QA findings before Unity validation without changing behavioral probes: "
-                + json.dumps({"review": review.model_dump(),
-                    "repair_round": preflight_round}))
-            review = await supervisor.agents["qa"].review_implementation(service, spec, plan)
-            write_json(job.directory / "qa_review.json", review.model_dump())
-            report["qa_review"] = review.model_dump()
-        report["limitations"] = list(spec.limitations) + review.missing_prompt_instructions + review.concerns
-        report["limitations"].extend("QA identified incomplete requirement " + r for r in review.missing_requirement_ids)
+        # Keep a validated implementation before any further paid QA call. A
+        # provider failure in review must not discard the completed development.
+        try:
+            save_implementation(job, project, spec, plan)
+        except ValueError as error:
+            # Scope/file checks also belong to the existing bounded repair loop
+            # below. Preserve the candidate without publishing unsafe scripts.
+            write_json(job.directory / "implementation_candidate.json", plan.model_dump())
+            job.event("developer", "implementation_preflight_failed", error=str(error)[:2000])
+        review = PlanReview()
         runner = UnityRunner(job, project)
         async def compile_generated():
             nonlocal plan
@@ -443,6 +453,20 @@ async def build_flexible(supervisor, service, spec, project, notify, android):
                     job.event("qa", stage, repair_round=attempt)
                     save_report()
                 runtime = json.loads((project / "Artifacts/runtime_checks.json").read_text(encoding="utf-8"))
+                # Review the actual built/tested implementation. Missing future
+                # APK/delivery evidence cannot trigger speculative rewrites
+                # before compilation or prevent any scene from being assembled.
+                service.verification_evidence = {"stages": report["stages"], "runtime": runtime,
+                                                "phase": "after_unity_tests_before_android_and_delivery"}
+                await supervisor.notify(notify, "QA: reviewing the assembled game with compilation and play-test evidence.")
+                review = await supervisor.agents["qa"].review_implementation(service, spec, plan)
+                write_json(job.directory / "qa_review.json", review.model_dump())
+                report["qa_review"] = review.model_dump()
+                report["limitations"] = list(spec.limitations) + review.missing_prompt_instructions + review.concerns
+                report["limitations"].extend("QA identified incomplete requirement " + r for r in review.missing_requirement_ids)
+                if review.missing_requirement_ids or review.missing_prompt_instructions or review.concerns:
+                    raise UnityFailure("qa_review", "QA review found concrete implementation concerns: " +
+                                       json.dumps(review.model_dump()), "qa")
                 break
             except (UnityFailure, ValueError) as error:
                 owner = error.owner if isinstance(error, UnityFailure) else "developer"
@@ -461,7 +485,7 @@ async def build_flexible(supervisor, service, spec, project, notify, android):
                 if owner == "infrastructure" or attempt == 3 or job.data["repairs"] >= 3:
                     raise
                 failed_stage = error.stage if isinstance(error, UnityFailure) else ""
-                if hasattr(service, "record_validation"):
+                if hasattr(service, "record_validation") and failed_stage != "qa_review":
                     failed_role = (getattr(service, "scene_owner", "developer") if owner == "scene" else
                                    getattr(service, "code_owner", "developer"))
                     service.record_validation(failed_role, False)
@@ -515,6 +539,7 @@ async def build_flexible(supervisor, service, spec, project, notify, android):
             report["limitations"].append("These user instructions were saved but arrived after planning; they were not applied to this build: " + " | ".join(queued))
         report["android"] = {"status": "not_requested", "device_test": "unverified"}
         if android:
+            await supervisor.notify(notify, "Android: switching target and building the verified game APK.")
             try:
                 report["android"] = await runner.android()
             except UnityFailure as error:

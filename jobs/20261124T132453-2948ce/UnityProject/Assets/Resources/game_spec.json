@@ -1,0 +1,546 @@
+{
+  "version": 2,
+  "name": "Bunny Dash",
+  "genre": "2D side-scrolling collect-a-thon platformer",
+  "dimension": "2D",
+  "camera_perspective": "Orthographic side view, fixed horizontal camera following the bunny along a single short level",
+  "target_platform": "Android mobile (APK)",
+  "orientation": "landscape",
+  "art_style": "Cute, colorful cartoon meadow with soft rounded shapes, pastel greens and sky blues, hand-drawn sprite look",
+  "palette": [
+    "#8FD3FF",
+    "#B7E4A0",
+    "#5FA84A",
+    "#FFF4C2",
+    "#FF9E3D",
+    "#FF6B6B",
+    "#FFFFFF",
+    "#4A3B2A"
+  ],
+  "mechanics": [
+    "Bunny moves left and right on the ground",
+    "Bunny jumps with reliable ground detection",
+    "Unity 2D physics with Rigidbody2D and Collider2D",
+    "Ground platforms with basic collision",
+    "5 collectible carrots counted toward a 0/5 counter",
+    "2 stationary obstacles that block movement",
+    "Collecting all 5 carrots triggers victory",
+    "Idle, walking, and jumping bunny animation states",
+    "Carrot collection effect on pickup"
+  ],
+  "controls": [
+    "On-screen Left button (touch)",
+    "On-screen Right button (touch)",
+    "On-screen Jump button (touch)",
+    "Keyboard A/D or Left/Right arrows for left/right (editor/desktop testing)",
+    "Keyboard Space for jump (editor/desktop testing)"
+  ],
+  "level_structure": "One short side-scrolling level in a single scene. A continuous ground platform spans the level with a couple of raised ground platforms for light verticality. The bunny starts at the left. Five carrots are placed along the level at reachable heights. Two stationary obstacles sit on the ground as simple blockers. Reaching and collecting all five carrots completes the level and shows the victory screen.",
+  "ui_requirements": [
+    "Clean main menu with a Play button",
+    "Mobile-friendly on-screen touch controls (Left, Right, Jump)",
+    "Carrot counter displayed as 0/5 and updating on collection",
+    "Simple victory screen with a Restart button",
+    "Landscape orientation with responsive UI anchored to screen edges"
+  ],
+  "scenes": [
+    "BunnyDash"
+  ],
+  "required_assets": [
+    {
+      "id": "bunny_sprite",
+      "kind": "sprite",
+      "prompt": "Original cute cartoon bunny character sprite for a 2D mobile game, side view, soft rounded body, big friendly eyes, long ears, light cream and pink fur, transparent background, clean thick outline, game-ready sprite, centered, full body",
+      "workflow": "image",
+      "library_path": "",
+      "license": "",
+      "width": 512,
+      "height": 512,
+      "transparent": true,
+      "pixels_per_unit": 256,
+      "requirement_ids": [
+        "R7",
+        "R8",
+        "R9",
+        "R10",
+        "R11"
+      ]
+    },
+    {
+      "id": "meadow_background",
+      "kind": "texture",
+      "prompt": "Colorful cartoon meadow background for a 2D side-scrolling mobile game, rolling green hills, blue sky, fluffy white clouds, scattered colorful flowers, soft pastel palette, cheerful and polished, wide landscape composition, no characters, no text",
+      "workflow": "image",
+      "library_path": "",
+      "license": "",
+      "width": 2048,
+      "height": 1024,
+      "transparent": false,
+      "pixels_per_unit": 128,
+      "requirement_ids": [
+        "R8"
+      ]
+    },
+    {
+      "id": "carrot_sprite",
+      "kind": "sprite",
+      "prompt": "Original cute cartoon carrot collectible sprite for a 2D mobile game, bright orange carrot with green leafy top, simple rounded cartoon style, transparent background, clean outline, centered, game-ready",
+      "workflow": "image",
+      "library_path": "",
+      "license": "",
+      "width": 256,
+      "height": 256,
+      "transparent": true,
+      "pixels_per_unit": 128,
+      "requirement_ids": [
+        "R8",
+        "R12"
+      ]
+    }
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "original_instruction": "Create a small, polished 2D Android mobile game called \"Bunny Dash\"",
+      "implementation": "Build a single polished 2D Unity project named Bunny Dash targeting Android, with a compact scope limited to one level and the requested systems.",
+      "owner": "designer",
+      "verification_method": "manual"
+    },
+    {
+      "id": "R2",
+      "original_instruction": "One short, playable side-scrolling level",
+      "implementation": "Create one short side-scrolling level in a single scene with a fixed side-view camera following the bunny horizontally.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R3",
+      "original_instruction": "A cute bunny character that can move left and right and jump",
+      "implementation": "Implement a bunny player with horizontal movement and jump input driving a Rigidbody2D.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R4",
+      "original_instruction": "Simple ground platforms, 5 collectible carrots, and 2 stationary obstacles",
+      "implementation": "Place ground platform colliders, exactly five carrot collectibles, and exactly two stationary obstacle colliders in the level.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R5",
+      "original_instruction": "Collect all 5 carrots to win",
+      "implementation": "Track collected carrots and trigger the victory state when the count reaches five.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R6",
+      "original_instruction": "Simple touch controls: Left, Right, Jump",
+      "implementation": "Add three on-screen touch buttons for Left, Right, and Jump that feed the same input as keyboard controls.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R7",
+      "original_instruction": "Smooth movement, reliable jumping, and basic collision physics",
+      "implementation": "Tune movement speed, jump force, ground check, and physics settings for smooth motion and reliable jumping with basic collision response.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R8",
+      "original_instruction": "Generate an original cute bunny sprite with a transparent background",
+      "implementation": "Generate the bunny sprite via image workflow with a transparent background and import it as a Unity sprite asset.",
+      "owner": "art",
+      "verification_method": "manual"
+    },
+    {
+      "id": "R9",
+      "original_instruction": "Generate a colorful cartoon meadow background with flowers, hills, and clouds",
+      "implementation": "Generate a colorful cartoon meadow background image with flowers, hills, and clouds and use it as the scene background.",
+      "owner": "art",
+      "verification_method": "manual"
+    },
+    {
+      "id": "R10",
+      "original_instruction": "Generate carrot collectible sprites",
+      "implementation": "Generate a carrot collectible sprite via image workflow and use it for all five collectibles.",
+      "owner": "art",
+      "verification_method": "manual"
+    },
+    {
+      "id": "R11",
+      "original_instruction": "Use the generated images as actual Unity game assets, not just references",
+      "implementation": "Import generated bunny, background, and carrot images into the Unity project and assign them to SpriteRenderer and UI components.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R12",
+      "original_instruction": "Keep image generation limited to these essential assets to save time and API costs",
+      "implementation": "Generate only the bunny sprite, meadow background, and carrot sprite; no other image generation requests.",
+      "owner": "art",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R13",
+      "original_instruction": "Bunny idle animation with subtle bouncing",
+      "implementation": "Implement a lightweight idle animation with subtle vertical bounce using Unity animation or procedural motion.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R14",
+      "original_instruction": "Bunny walking animation",
+      "implementation": "Implement a walking animation state driven by horizontal movement.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R15",
+      "original_instruction": "Bunny jumping animation",
+      "implementation": "Implement a jumping animation state while airborne.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R16",
+      "original_instruction": "Simple carrot collection effect",
+      "implementation": "Add a simple collection effect such as a quick scale/fade pop when a carrot is collected.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R17",
+      "original_instruction": "Clean main menu with Play button",
+      "implementation": "Create a main menu overlay with a Play button that starts the level.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R18",
+      "original_instruction": "Mobile-friendly touch controls",
+      "implementation": "Design large, thumb-friendly touch buttons anchored to screen corners for landscape play.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R19",
+      "original_instruction": "Carrot counter (0/5)",
+      "implementation": "Display a carrot counter starting at 0/5 and update it on each collection.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R20",
+      "original_instruction": "Simple victory screen with Restart button",
+      "implementation": "Show a victory overlay when all carrots are collected, with a Restart button that resets the level.",
+      "owner": "developer",
+      "verification_method": "runtime"
+    },
+    {
+      "id": "R21",
+      "original_instruction": "Landscape orientation and responsive UI",
+      "implementation": "Lock Android orientation to landscape and use responsive Canvas anchoring for all UI.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R22",
+      "original_instruction": "Strictly Unity 2D, not 3D",
+      "implementation": "Use Unity 2D mode with orthographic camera, SpriteRenderer, and 2D physics only; no 3D meshes or 3D physics.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R23",
+      "original_instruction": "Android APK output",
+      "implementation": "Configure Android build settings and produce an installable APK.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R24",
+      "original_instruction": "One scene and one short level",
+      "implementation": "Keep the entire game in a single Unity scene containing one short level.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R25",
+      "original_instruction": "Use Unity 2D physics, SpriteRenderer, Rigidbody2D, and Collider2D",
+      "implementation": "Implement player and collectibles using SpriteRenderer, Rigidbody2D, and Collider2D components with Unity 2D physics.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R26",
+      "original_instruction": "Keep scripts and assets minimal",
+      "implementation": "Limit scripts to a small set covering player, collectibles, game state, and UI, and reuse the three generated assets.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R27",
+      "original_instruction": "Automatically compile, test movement, jumping, collisions, collection, and victory",
+      "implementation": "Run automated compile and play-mode tests covering movement, jumping, collisions, collection, and victory.",
+      "owner": "qa",
+      "verification_method": "pipeline"
+    },
+    {
+      "id": "R28",
+      "original_instruction": "Repair detected issues within the existing retry and budget limits",
+      "implementation": "Fix issues found by tests within the existing retry and budget limits, re-running tests after each fix.",
+      "owner": "developer",
+      "verification_method": "pipeline"
+    },
+    {
+      "id": "R29",
+      "original_instruction": "Build the APK and send it through Telegram",
+      "implementation": "Build the APK and deliver it through the Telegram integration.",
+      "owner": "developer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R30",
+      "original_instruction": "Prioritize a complete, working, visually appealing mini-game over unnecessary complexity",
+      "implementation": "Keep scope to the requested features and focus effort on a complete, working, visually appealing result.",
+      "owner": "designer",
+      "verification_method": "manual"
+    },
+    {
+      "id": "R31",
+      "original_instruction": "Do not add extra levels, enemies, complex mechanics, or features",
+      "implementation": "Exclude extra levels, enemies, and complex mechanics; implement only the requested features.",
+      "owner": "designer",
+      "verification_method": "structure"
+    },
+    {
+      "id": "R32",
+      "original_instruction": "Report any unavailable image-generation capability instead of pretending images were generated",
+      "implementation": "If image generation is unavailable or fails, report it explicitly and do not fabricate generated images.",
+      "owner": "art",
+      "verification_method": "manual"
+    },
+    {
+      "id": "R33",
+      "original_instruction": "also produce a verified Android APK",
+      "implementation": "Produce an Android APK and verify it builds and installs successfully.",
+      "owner": "qa",
+      "verification_method": "pipeline"
+    },
+    {
+      "id": "R34",
+      "original_instruction": "Preserve the user's requested primary platform and design any needed Android touch controls alongside its existing controls",
+      "implementation": "Keep Android as the primary platform and provide touch controls alongside keyboard controls without replacing them.",
+      "owner": "developer",
+      "verification_method": "structure"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T1",
+      "description": "Finalize the compact design: one short side-scrolling level, bunny movement/jump, five carrots, two obstacles, and the requested UI flow.",
+      "owner": "designer",
+      "dependencies": [],
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R30",
+        "R31"
+      ]
+    },
+    {
+      "id": "T2",
+      "description": "Generate the three essential images (bunny sprite, meadow background, carrot sprite) via the image workflow and report any unavailability.",
+      "owner": "art",
+      "dependencies": [],
+      "requirement_ids": [
+        "R8",
+        "R9",
+        "R10",
+        "R12",
+        "R32"
+      ]
+    },
+    {
+      "id": "T3",
+      "description": "Import generated images as Unity sprite assets and assign them to SpriteRenderer and UI components.",
+      "owner": "developer",
+      "dependencies": [
+        "T2"
+      ],
+      "requirement_ids": [
+        "R11"
+      ]
+    },
+    {
+      "id": "T4",
+      "description": "Set up the single Unity 2D scene with orthographic camera, ground platforms, five carrots, two stationary obstacles, and the bunny player using Rigidbody2D and Collider2D.",
+      "owner": "developer",
+      "dependencies": [
+        "T1",
+        "T3"
+      ],
+      "requirement_ids": [
+        "R2",
+        "R4",
+        "R22",
+        "R24",
+        "R25"
+      ]
+    },
+    {
+      "id": "T5",
+      "description": "Implement player movement, jumping, ground detection, and collision tuning for smooth reliable physics.",
+      "owner": "developer",
+      "dependencies": [
+        "T4"
+      ],
+      "requirement_ids": [
+        "R3",
+        "R7"
+      ]
+    },
+    {
+      "id": "T6",
+      "description": "Implement carrot collection counting, collection effect, and victory trigger at five carrots.",
+      "owner": "developer",
+      "dependencies": [
+        "T4"
+      ],
+      "requirement_ids": [
+        "R5",
+        "R16"
+      ]
+    },
+    {
+      "id": "T7",
+      "description": "Implement idle, walking, and jumping bunny animation states using lightweight Unity or procedural animation.",
+      "owner": "developer",
+      "dependencies": [
+        "T5"
+      ],
+      "requirement_ids": [
+        "R13",
+        "R14",
+        "R15"
+      ]
+    },
+    {
+      "id": "T8",
+      "description": "Build the main menu with Play button, carrot counter 0/5, victory screen with Restart button, and responsive landscape UI.",
+      "owner": "developer",
+      "dependencies": [
+        "T4"
+      ],
+      "requirement_ids": [
+        "R17",
+        "R19",
+        "R20",
+        "R21"
+      ]
+    },
+    {
+      "id": "T9",
+      "description": "Add mobile-friendly touch controls (Left, Right, Jump) alongside keyboard controls.",
+      "owner": "developer",
+      "dependencies": [
+        "T5"
+      ],
+      "requirement_ids": [
+        "R6",
+        "R18",
+        "R34"
+      ]
+    },
+    {
+      "id": "T10",
+      "description": "Configure Android build settings, landscape orientation, and produce the APK.",
+      "owner": "developer",
+      "dependencies": [
+        "T8",
+        "T9"
+      ],
+      "requirement_ids": [
+        "R23",
+        "R21"
+      ]
+    },
+    {
+      "id": "T11",
+      "description": "Run automated compile and play-mode tests for movement, jumping, collisions, collection, and victory; fix issues within retry and budget limits.",
+      "owner": "qa",
+      "dependencies": [
+        "T5",
+        "T6",
+        "T7",
+        "T8",
+        "T9"
+      ],
+      "requirement_ids": [
+        "R27",
+        "R28"
+      ]
+    },
+    {
+      "id": "T12",
+      "description": "Verify the APK builds and installs, then deliver it through Telegram.",
+      "owner": "qa",
+      "dependencies": [
+        "T10",
+        "T11"
+      ],
+      "requirement_ids": [
+        "R29",
+        "R33"
+      ]
+    },
+    {
+      "id": "T13",
+      "description": "Human review of generated art usage, visual polish, and confirmation that no extra levels, enemies, or complex mechanics were added.",
+      "owner": "qa",
+      "dependencies": [
+        "T3",
+        "T8",
+        "T9"
+      ],
+      "requirement_ids": [
+        "R8",
+        "R9",
+        "R10",
+        "R11",
+        "R30",
+        "R31"
+      ]
+    },
+    {
+      "id": "T14",
+      "description": "Complete the planned work for requirements: R26",
+      "owner": "developer",
+      "dependencies": [],
+      "requirement_ids": [
+        "R26"
+      ]
+    }
+  ],
+  "assumptions": [
+    "The game uses a single Unity scene named BunnyDash containing the menu, level, and victory overlays.",
+    "The bunny sprite is a single static sprite animated procedurally (bounce, tilt, squash) rather than a multi-frame sprite sheet, to keep image generation limited to essential assets.",
+    "Keyboard controls are included for editor/desktop testing alongside the required touch controls.",
+    "The two stationary obstacles are simple blocking colliders with no damage or movement.",
+    "The camera follows the bunny horizontally within the short level bounds.",
+    "Telegram delivery uses the existing pipeline integration and credentials."
+  ],
+  "clarification_questions": [],
+  "limitations": [
+    "Image generation is limited to three essential assets; no additional art will be generated.",
+    "Animations are lightweight/procedural rather than hand-authored multi-frame sprite animations.",
+    "Only one short level and one scene are included, with no extra levels, enemies, or complex mechanics.",
+    "APK delivery depends on the Telegram integration being available in the pipeline."
+  ]
+}

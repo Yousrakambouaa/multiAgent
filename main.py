@@ -68,6 +68,8 @@ async def run(args):
                     print(role,mid,"USD/M input/output",[v*1_000_000 for v in registry.rates(mid)])
         return 0
     supervisor=Supervisor()
+    if getattr(args,"budget",None) is not None:
+        supervisor.set_budget(args.budget, update_current=args.command not in ("create", "demo"))
     if args.command in ("create","demo"):
         request=args.description if args.command=="create" else "Create a polished woodland 2D platformer with jumping, coins, enemies and an exit"
         job=await supervisor.submit(request,notify=console,demo=args.command=="demo")
@@ -100,6 +102,7 @@ def main():
         if name=="create": command.add_argument("description")
         if name in ("create","demo"): command.add_argument("--approve",action="store_true")
         command.add_argument("--android",action="store_true")
+        command.add_argument("--budget",type=float,help="Set the current and future API job cap (default maximum $50)")
     for name in ("models","status","plan","cancel","mcp-status","mcp-smoke"): sub.add_parser(name)
     args=parser.parse_args()
     with ProcessLock(ROOT/".studio_cache"/"controller.lock"):

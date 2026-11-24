@@ -10,7 +10,20 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from studio.schemas import Contract, GameSpec, CodeBundle, ObjectSpec, PropertySpec
+from studio.schemas import Contract, GameSpec, CodeBundle, ScriptFile, ObjectSpec, PropertySpec
+
+
+def _is_pipeline_requirement(text):
+    text = str(text or "").casefold()
+    if re.search(r"\b(?:move|movement|jump|jumping|collect|collection|collision|collisions|touch|controls|player|enemy|enemies|score|win|victory|gameplay)\b", text):
+        return False
+    return any(re.search(pattern, text) for pattern in (
+        r"\b(?:android\s+)?apk\b",
+        r"\b(?:edit[- ]mode|play[- ]mode)\s+tests?\b",
+        r"\bautomated\s+(?:compile\s+and\s+)?(?:unity\s+)?tests?\b",
+        r"\b(?:retry|retries)\b.*\bbudget\b|\bbudget\b.*\b(?:retry|retries)\b",
+        r"\btelegram\b.*\b(?:deliver|send|upload)|\b(?:deliver|send|upload)\b.*\btelegram\b",
+    ))
 
 
 class Requirement(Contract):
@@ -18,8 +31,14 @@ class Requirement(Contract):
     original_instruction: str = Field(min_length=1, max_length=4000)
     implementation: str = Field(min_length=1, max_length=2000)
     owner: Literal["supervisor", "designer", "developer", "art", "qa"]
-    verification_method: Literal["runtime", "structure", "manual"]
+    verification_method: Literal["runtime", "structure", "manual", "pipeline"]
     # Status is computed by the supervisor; a model cannot mark itself verified.
+
+    @model_validator(mode="after")
+    def classify_pipeline_requirement(self):
+        if self.verification_method == "runtime" and _is_pipeline_requirement(self.original_instruction):
+            self.verification_method = "pipeline"
+        return self
 
 
 class FlexibleAsset(Contract):
@@ -208,8 +227,8 @@ class FlexibleScene(Contract):
     @model_validator(mode="after")
     def links(self):
         ids = {o.id for o in self.objects}
-        if len(ids) != len(self.objects) or len({o.name for o in self.objects}) != len(ids):
-            raise ValueError("Object IDs and names must be unique within a scene")
+        if len(ids) != len(self.objects):
+            raise ValueError("Object IDs must be unique within a scene")
         by_id = {o.id: o for o in self.objects}
         for obj in self.objects:
             chain, parent = {obj.id}, obj.parent
@@ -221,7 +240,11 @@ class FlexibleScene(Contract):
             for comp in obj.components:
                 for prop in comp.properties:
                     if prop.kind == "reference" and prop.value.split(":")[0] not in ids:
-                        raise ValueError("Missing serialized reference target")
+                        target = prop.value.split(":", 1)[0]
+                        raise ValueError(f"Missing serialized reference target {target!r} in "
+                            f"{self.name}/{obj.id}/{comp.type}.{prop.name}. "
+                            "References require a declared object ID; omit unused optional properties instead of "
+                            "supplying an empty reference. Available IDs: " + ", ".join(sorted(ids)))
         return self
 
 
@@ -260,8 +283,14 @@ class RuntimeProbe(Contract):
     assertions: list[ProbeAssertion] = Field(min_length=1, max_length=30)
 
 
+class GameCodeBundle(CodeBundle):
+    # The legacy rules-only bundle allowed eight files. A standalone game needs
+    # separate components for controls, UI, progression and gameplay systems.
+    scripts: list[ScriptFile] = Field(min_length=1, max_length=32)
+
+
 class Implementation(Contract):
-    scripts: CodeBundle
+    scripts: GameCodeBundle
     scenes: SceneBundleV2
     probes: list[RuntimeProbe] = Field(min_length=1, max_length=100)
     # Art and other unfinished requirements must be declared, never silently dropped.
@@ -279,13 +308,89 @@ class Implementation(Contract):
         return value
 
 
+class ImplementationEdit(Contract):
+    op: Literal["add", "replace", "remove"]
+    path: str = Field(pattern=r"^/(scripts|scenes|probes)/.+")
+    value: object = None
+
+
+class ImplementationEdits(Contract):
+    edits: list[ImplementationEdit] = Field(min_length=1, max_length=30)
+
+
+def apply_implementation_edits(candidate, response):
+    """Apply bounded data edits, then let the complete contract validate them.
+
+    Existing probes are immutable; a repair may only append a new probe.
+    No generated code is executed.
+    """
+    from copy import deepcopy
+    result = deepcopy(candidate)
+    for edit in ImplementationEdits.model_validate(response).edits:
+        parts = [part.replace("~1", "/").replace("~0", "~") for part in edit.path[1:].split("/")]
+        if parts[0] == "probes" and (edit.op != "add" or parts != ["probes", "-"]):
+            raise ValueError("Probe edits may only append a new probe at /probes/-")
+        target = result
+        try:
+            for part in parts[:-1]:
+                target = target[int(part)] if isinstance(target, list) and part.isdigit() else target[part]
+            key = parts[-1]
+            if isinstance(target, list):
+                index = len(target) if key == "-" and edit.op == "add" else int(key)
+                if index < 0 or index >= len(target) + (edit.op == "add"):
+                    raise ValueError("List index out of range")
+                if edit.op == "add": target.insert(index, edit.value)
+                elif edit.op == "remove": target.pop(index)
+                else: target[index] = edit.value
+            elif isinstance(target, dict):
+                if edit.op != "add" and key not in target:
+                    raise ValueError("Object key does not exist")
+                if edit.op == "remove": del target[key]
+                else: target[key] = edit.value
+            else:
+                raise ValueError("Edit target is not a container")
+        except (KeyError, IndexError, TypeError, ValueError) as error:
+            raise ValueError(f"Invalid implementation edit path {edit.path!r}: {error}") from error
+    return result
+
+
+def preserves_existing_probes(original, candidate):
+    original_probes = original.get("probes", []) if isinstance(original, dict) else None
+    candidate_probes = candidate.get("probes") if isinstance(candidate, dict) else None
+    return (isinstance(original_probes, list) and isinstance(candidate_probes, list)
+            and len(candidate_probes) >= len(original_probes)
+            and candidate_probes[:len(original_probes)] == original_probes)
+
+
 def normalize_implementation_response(value, spec):
     """Adapt common flattened model output to the versioned implementation contract."""
     if not isinstance(value, dict):
         return value
-    normalized = dict(value)
+    from copy import deepcopy
+    normalized = deepcopy(value)
     if isinstance(normalized.get("scripts"), list):
         normalized["scripts"] = {"scripts": normalized["scripts"]}
+    script_bundle = normalized.get("scripts")
+    if isinstance(script_bundle, dict):
+        for key in ("probes", "implemented_requirement_ids", "limitations"):
+            if key in script_bundle:
+                nested_value = script_bundle.pop(key)
+                if key in normalized and normalized[key] != nested_value:
+                    raise ValueError(f"Conflicting implementation field: {key}")
+                normalized[key] = nested_value
+        scripts = script_bundle.get("scripts")
+        if isinstance(scripts, list):
+            script_requirement_ids = []
+            for script in scripts:
+                if not isinstance(script, dict) or not isinstance(script.get("requirement_ids"), list):
+                    continue
+                script_requirement_ids.extend(script.pop("requirement_ids"))
+            if script_requirement_ids:
+                current = normalized.get("implemented_requirement_ids", [])
+                if not isinstance(current, list):
+                    raise ValueError("implemented_requirement_ids must be a list")
+                normalized["implemented_requirement_ids"] = list(dict.fromkeys(
+                    [*current, *script_requirement_ids]))
 
     scenes = normalized.get("scenes")
     if isinstance(scenes, list):
@@ -299,13 +404,61 @@ def normalize_implementation_response(value, spec):
         normalized["scenes"] = raw_bundle
     elif isinstance(scenes, dict):
         bundle = dict(scenes)
+        explicit_bundle_fields = set(bundle)
+        lifted_fields = {}
+        for scene in bundle.get("scenes", []):
+            if not isinstance(scene, dict):
+                continue
+            for key in ("version", "title", "dimension", "orientation", "materials"):
+                if key not in scene:
+                    continue
+                nested_value = scene.pop(key)
+                previous = lifted_fields.get(key, bundle.get(key) if key in explicit_bundle_fields else None)
+                if previous is not None and previous != nested_value:
+                    raise ValueError(f"Conflicting scene bundle field: {key}")
+                lifted_fields[key] = nested_value
+                if key not in explicit_bundle_fields:
+                    bundle[key] = nested_value
+        for key in ("version", "title", "dimension", "orientation", "materials"):
+            if key in normalized:
+                outer_value = normalized.pop(key)
+                previous = bundle.get(key) if key in explicit_bundle_fields or key in lifted_fields else None
+                if previous is not None and previous != outer_value:
+                    raise ValueError(f"Conflicting scene bundle field: {key}")
+                bundle[key] = outer_value
         bundle.setdefault("version", 2)
-        bundle.setdefault("title", normalized.pop("title", spec.name))
-        bundle.setdefault("dimension", normalized.pop("dimension", spec.dimension))
-        bundle.setdefault("orientation", normalized.pop("orientation", spec.orientation))
-        outer_materials = normalized.pop("materials", [])
-        bundle.setdefault("materials", outer_materials)
+        bundle.setdefault("title", spec.name)
+        bundle.setdefault("dimension", spec.dimension)
+        bundle.setdefault("orientation", spec.orientation)
+        bundle.setdefault("materials", [])
         normalized["scenes"] = bundle
+    # These fields belong to Implementation, even when a model nests them in
+    # the scene envelope. Conflicting copies are errors, never silently erased.
+    bundle = normalized.get("scenes")
+    if isinstance(bundle, dict):
+        for key in ("probes", "implemented_requirement_ids", "limitations"):
+            if key in bundle:
+                if key in normalized and normalized[key] != bundle[key]:
+                    raise ValueError(f"Conflicting implementation field: {key}")
+                normalized[key] = bundle.pop(key)
+        for scene in bundle.get("scenes", []):
+            if not isinstance(scene, dict):
+                continue
+            for obj in scene.get("objects", []):
+                if not isinstance(obj, dict):
+                    continue
+                for component in obj.get("components", []):
+                    if not isinstance(component, dict):
+                        continue
+                    properties = component.get("properties")
+                    if isinstance(properties, dict):
+                        # Only typed maps are losslessly convertible. Raw Unity
+                        # values need actual member types (int vs float, enum vs
+                        # string, Component vs GameObject); don't guess them.
+                        if all(isinstance(p, dict) and "kind" in p and "value" in p
+                               and "name" not in p for p in properties.values()):
+                            component["properties"] = [dict(name=name, **prop)
+                                                       for name, prop in properties.items()]
     return normalized
 
 
@@ -374,6 +527,30 @@ def enforce_requested_dimension(request, spec):
     planned = spec.dimension
     spec.dimension = requested
     return {"requested": requested, "planned": planned}
+
+
+def align_tooling_requirements(spec):
+    """Route build/delivery/workflow checks outside the gameplay harness.
+
+    Preserve the original instructions and all gameplay probes. Structural
+    requirements remain unverified in reports until reviewed; this never marks
+    an APK, a Telegram delivery or a repair loop as a passing gameplay test.
+    """
+    if getattr(spec, "version", 1) != 2:
+        return []
+    changes = []
+    gameplay = re.compile(r"\b(?:move|movement|jump|jumping|collect|collection|collision|collisions|touch|controls|player|enemy|enemies|score|win|victory|gameplay)\b", re.I)
+    for req in spec.requirements:
+        text = req.original_instruction
+        if req.verification_method != "runtime" or gameplay.search(text):
+            continue
+        tooling = (re.search(r"\bAPK\b|\bTelegram\b", text, re.I) or
+                   re.search(r"\brepair\b.*\b(?:retry|budget|limits)\b", text, re.I))
+        if tooling:
+            req.verification_method = "structure"
+            changes.append({"requirement_id": req.id, "from": "runtime", "to": "structure",
+                            "reason": "build/delivery/supervisor evidence is outside Unity gameplay probes"})
+    return changes
 
 
 def _property_vector(value, size, context):
@@ -461,7 +638,9 @@ def _validate_scene_values(spec, plan):
 def validate_implementation(spec, plan):
     reqs = {r.id for r in spec.requirements}
     if [s.name for s in plan.scenes.scenes] != spec.scenes or plan.scenes.dimension != spec.dimension:
-        raise ValueError("Implementation changed scene structure or dimension")
+        raise ValueError("Implementation changed scene structure or dimension. "
+                         f"Expected {spec.dimension} scenes {spec.scenes!r}; received "
+                         f"{plan.scenes.dimension} scenes {[s.name for s in plan.scenes.scenes]!r}")
     if plan.scenes.orientation != spec.orientation:
         raise ValueError("Implementation changed requested orientation")
     _validate_scene_values(spec, plan)
@@ -508,7 +687,9 @@ def validate_implementation(spec, plan):
             raise ValueError("Unknown probe requirement or scene")
         objects = next(s.objects for s in plan.scenes.scenes if s.name == probe.scene)
         ids = {o.id for o in objects}
-        names = {o.name: o.id for o in objects}
+        # Unity permits repeated display names (for example a Text child on
+        # several buttons). Stable IDs remain unique; aliases must be unambiguous.
+        names = {o.name: o.id for o in objects if sum(other.name == o.name for other in objects) == 1}
         available = ", ".join(sorted(ids))
         for section, items in (("steps", probe.steps), ("assertions", probe.assertions)):
             for index, item in enumerate(items):
@@ -518,7 +699,7 @@ def validate_implementation(spec, plan):
                 if section == "assertions" and item.kind == "scene":
                     continue
                 # Models sometimes use the display name instead of the stable ID.
-                # Names are unique within a scene; never guess a different object.
+                # Resolve unique display names only; never guess among duplicates.
                 if item.object_id not in ids and item.object_id in names:
                     item.object_id = names[item.object_id]
                 if item.object_id not in ids:

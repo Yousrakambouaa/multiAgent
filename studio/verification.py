@@ -17,7 +17,7 @@ async def verify(supervisor, notify, android=False):
     project=job.directory/"UnityProject"
     if not project.exists(): raise RuntimeError("No generated Unity project")
     report={"job_id":job.data["id"],"game":"","project":str(project),"stages":{},"limitations":[
-        "MVP supports 2D platformers only.","Real-device UX and aesthetic quality require human review."]}
+        "Real-device UX and aesthetic quality require human review."]}
     spec = None
     try:
         with ProcessLock(supervisor.root/".unity.lock"):
@@ -29,6 +29,7 @@ async def verify(supervisor, notify, android=False):
             spec=load_game_spec((job.directory/"game_spec.json").read_text(encoding="utf-8"))
             if spec.version == 2:
                 return await verify_flexible(supervisor, spec, project, notify, android)
+            report["limitations"].append("MVP supports 2D platformers only.")
             ui=UIPlan.model_validate_json((job.directory/"ui_plan.json").read_text(encoding="utf-8"))
             manifest=json.loads((job.directory/"art_manifest.json").read_text(encoding="utf-8"))
             art={a["kind"]:a["path"] for a in manifest}
@@ -78,7 +79,8 @@ async def verify_flexible(supervisor, spec, project, notify, android):
     report = json.loads(previous.read_text(encoding="utf-8")) if previous.is_file() else {}
     report.update(job_id=job.data["id"], game=spec.name, dimension=spec.dimension,
                   camera_perspective=spec.camera_perspective, target_platform=spec.target_platform,
-                  spec_version=2, project=str(project), stages={}, completion_status="partial")
+                  spec_version=2, project=str(project), stages={}, completion_status="partial",
+                  limitations=list(spec.limitations) + list(plan.limitations))
     report.pop("verification_error", None)
     report.setdefault("limitations", list(spec.limitations) + list(plan.limitations))
     runner = UnityRunner(job, project)
@@ -98,6 +100,7 @@ async def verify_flexible(supervisor, spec, project, notify, android):
     write_json(job.directory / "requirements.json", report["requirements"])
     report["android"] = {"status": "not_requested", "device_test": "unverified"}
     if android:
+        await supervisor.notify(notify, "Android: switching target and building the verified game APK.")
         report["android"] = await runner.android()
     if all(r["verification_result"] == "passed" and r["implementation_status"] != "incomplete" for r in report["requirements"]) and not report["limitations"]:
         report["completion_status"] = "completed"

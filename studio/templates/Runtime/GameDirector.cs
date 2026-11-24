@@ -28,7 +28,7 @@ namespace Studio.Runtime {
             Application.targetFrameRate=60;
         }
         void Start() {
-            Time.timeScale = 1; TouchPad.Reset();
+            Time.timeScale = 1; TouchPad.ResetState();
             var player = FindFirstObjectByType<PlayerMotor>();
             var rules = GetComponent<LevelRules>();
             if (player != null && rules != null) rules.Configure(player);
@@ -44,7 +44,7 @@ namespace Studio.Runtime {
         public void Play() { LastScore = 0; Time.timeScale = 1; SceneManager.LoadScene(firstScene); }
         public void Restart() { Time.timeScale = 1; SceneManager.LoadScene(SceneManager.GetActiveScene().name); }
         public void Menu() { Time.timeScale = 1; SceneManager.LoadScene(menuScene); }
-        public void Pause() { Time.timeScale = Time.timeScale == 0 ? 1 : 0; if (pausePanel != null) pausePanel.SetActive(Time.timeScale == 0); TouchPad.Reset(); }
+        public void Pause() { Time.timeScale = Time.timeScale == 0 ? 1 : 0; if (pausePanel != null) pausePanel.SetActive(Time.timeScale == 0); TouchPad.ResetState(); }
         private RectTransform Rect(GameObject obj, Vector2 anchor, Vector2 position, Vector2 size) {
             var rect = obj.GetComponent<RectTransform>(); rect.anchorMin = rect.anchorMax = anchor; rect.anchoredPosition = position;
             float width=canvas.GetComponent<RectTransform>().rect.width;
@@ -98,6 +98,6 @@ namespace Studio.Runtime {
                 pausePanel.SetActive(false);
             }
         }
-        void OnDestroy() { Time.timeScale = 1; TouchPad.Reset(); }
+        void OnDestroy() { Time.timeScale = 1; TouchPad.ResetState(); }
     }
 }

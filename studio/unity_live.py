@@ -144,12 +144,26 @@ async def run_live(runner, stage, extra, timeout):
         if stage == "android":
             evidence_path = runner.project / "Artifacts/android.json"
             apk_path = runner.project / "Artifacts/prototype.apk"
+            progress_path = runner.project / "Artifacts/android_progress.json"
+            last_progress = None
             evidence_path.unlink(missing_ok=True)
             apk_path.unlink(missing_ok=True)
             await call("developer", "execute_menu_item", {"menu_path": "Studio/Build Android APK"})
             while time.monotonic() < deadline:
+                if progress_path.is_file():
+                    try:
+                        phase = json.loads(progress_path.read_text(encoding="utf-8")).get("phase")
+                        if phase and phase != last_progress:
+                            last_progress = phase
+                            runner.job.event("developer", "android_" + phase)
+                    except (OSError, ValueError):
+                        pass
                 if evidence_path.is_file():
-                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    try:
+                        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        await asyncio.sleep(.2)
+                        continue
                     if evidence.get("success") and apk_path.is_file() and apk_path.stat().st_size >= 10000:
                         import zipfile
                         with zipfile.ZipFile(apk_path) as archive:

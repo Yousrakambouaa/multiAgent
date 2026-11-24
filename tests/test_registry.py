@@ -9,7 +9,9 @@ from studio.registry import Registry
 
 def model(mid, prompt="0", completion="0", **extra):
     return {"id": mid, "pricing": {"prompt": prompt, "completion": completion},
-            "supported_parameters": ["response_format"], "context_length": 65536, **extra}
+            "supported_parameters": ["response_format"], "context_length": 65536,
+            "architecture": {"modality": "text->text", "input_modalities": ["text"],
+                             "output_modalities": ["text"]}, **extra}
 
 
 class RegistryTests(unittest.IsolatedAsyncioTestCase):
@@ -33,6 +35,16 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("test-secret",str(error.exception))
         self.assertEqual(registry.models,{})
         self.assertIsNone(registry.verified_at)
+
+    async def test_catalog_http_failure_preserves_provider_diagnostic(self):
+        original=httpx.AsyncClient
+        def handle(request):
+            return httpx.Response(503,json={"error":{"message":"catalog temporarily unavailable"}})
+        registry=Registry()
+        with patch.dict(os.environ,{"OPENROUTER_API_KEY":"test-secret"}),patch(
+                "studio.registry.httpx.AsyncClient",side_effect=lambda **kw:original(transport=httpx.MockTransport(handle))):
+            with self.assertRaisesRegex(RuntimeError,"OpenRouter model catalog lookup failed \\(HTTP 503\\).*catalog temporarily unavailable"):
+                await registry.refresh()
 
     async def test_discovery_uses_active_key_catalog_and_does_not_cache_key_metadata(self):
         calls=[];original=httpx.AsyncClient
@@ -111,3 +123,36 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(list(registry.candidates("developer")),["preferred","free0:free","free1:free","free2:free"])
         with patch.dict(os.environ,{"STUDIO_AUTO_MODEL_FALLBACK":"0"}):
             self.assertEqual(list(registry.candidates("developer")),["preferred"])
+
+    def test_paid_models_rank_first_but_keep_a_free_fallback_and_exclude_audio_outputs(self):
+        registry=Registry()
+        registry.roles={"developer":[]}
+        registry.verified_at="live"
+        registry.models={
+            "premium-a":model("premium-a","0.00001","0.00002"),
+            "premium-b":model("premium-b","0.00002","0.00004"),
+            "premium-c":model("premium-c","0.00003","0.00006"),
+            "premium-d":model("premium-d","0.00004","0.00008"),
+            "over-budget":model("over-budget","0.001","0.005"),
+            "free-a:free":model("free-a:free"),
+            "lyria":model("lyria",architecture={"modality":"text+image->text+audio",
+                "input_modalities":["text","image"],"output_modalities":["text","audio"]})}
+        with patch.dict(os.environ,{"STUDIO_MODEL_SELECTION":"dynamic","STUDIO_ALLOW_PAID_MODELS":"1"}):
+            self.assertEqual(list(registry.candidates("developer")),
+                             ["premium-a","premium-b","premium-c","free-a:free"])
+            request=[{"role":"user","content":"code generation task"}]
+            candidates=list(registry.candidates("developer",request,16000,2.0))
+            self.assertEqual(candidates,["premium-a","premium-b","premium-c","free-a:free"])
+            self.assertNotIn("over-budget",candidates)
+            self.assertFalse(registry.text_eligible("lyria"))
+
+    def test_request_constraints_filter_models_before_shortlisting(self):
+        registry=Registry()
+        registry.roles={"developer":[]}
+        registry.verified_at="live"
+        registry.models={
+            "too-small":model("too-small",top_provider={"max_completion_tokens":100}),
+            "large-enough":model("large-enough",top_provider={"max_completion_tokens":1000})}
+        with patch.dict(os.environ,{"STUDIO_MODEL_SELECTION":"dynamic","STUDIO_ALLOW_PAID_MODELS":"1"}):
+            candidates=list(registry.candidates("developer",[{"role":"user","content":"task"}],500))
+        self.assertEqual(candidates,["large-enough"])

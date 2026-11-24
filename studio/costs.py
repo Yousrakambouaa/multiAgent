@@ -1,6 +1,18 @@
 from decimal import Decimal
 
 
+def validate_budget(value):
+    from studio.config import MAX_JOB_CAP
+    try:
+        cap = Decimal(str(value))
+        maximum = Decimal(str(MAX_JOB_CAP))
+    except Exception as error:
+        raise ValueError("Budget must be a finite dollar amount") from error
+    if not cap.is_finite() or not maximum.is_finite() or cap < Decimal("0.01") or cap > maximum:
+        raise ValueError(f"Budget must be between $0.01 and ${maximum:g}")
+    return float(cap)
+
+
 class BudgetExceeded(RuntimeError):
     pass
 
@@ -12,6 +24,15 @@ class Ledger:
     @property
     def committed(self):
         return sum((Decimal(str(e["charged_usd"])) for e in self.job.data["costs"]), Decimal(0))
+
+    @property
+    def remaining(self):
+        return max(Decimal(0), Decimal(str(self.job.data["cap_usd"])) - self.committed)
+
+    def can_reserve(self, ceiling):
+        ceiling = Decimal(str(ceiling))
+        return (not self.job.data.get("budget_halted") and ceiling.is_finite()
+                and ceiling >= 0 and self.committed + ceiling <= Decimal(str(self.job.data["cap_usd"])))
 
     def reserve(self, role, model, ceiling):
         if self.job.data.get("budget_halted"):

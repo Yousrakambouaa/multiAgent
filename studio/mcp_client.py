@@ -75,7 +75,7 @@ def transient_editor_error(error):
         "unity instance" in text and "not found" in text and "available instances" in text)
 
 
-async def wait_for_project(client, project, timeout=90, check_cancelled=None):
+async def wait_for_project(client, project, timeout=90, check_cancelled=None, allow_startup_missing=False):
     """Wait through bridge/domain reload gaps without accepting another project."""
     deadline = time.monotonic() + max(0, timeout)
     while True:
@@ -84,7 +84,8 @@ async def wait_for_project(client, project, timeout=90, check_cancelled=None):
         try:
             return await client.verify_project(project)
         except MCPError as error:
-            if not transient_editor_error(error):
+            startup_gap = allow_startup_missing and "does not match this job's UnityProject" in str(error)
+            if not transient_editor_error(error) and not startup_gap:
                 raise
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -178,6 +179,7 @@ class UnityMCPClient:
         self._persistent = False
         self._environment_signature = None
         self._active_instance_id = None
+        self._verified_project_root = None
         self._lock = asyncio.Lock()
         self._stderr_task = None
 
@@ -352,6 +354,8 @@ class UnityMCPClient:
                     self._active_instance_id = None
                     raise MCPError("No Unity Editor instances found. Waiting for the project bridge.")
                 if not matches:
+                    if self._verified_project_root == expected:
+                        raise MCPError("Known project bridge is reconnecting during domain reload; waiting for the matching Unity Editor")
                     raise MCPError("Connected Unity Editor does not match this job's UnityProject")
                 if len(matches) != 1 or not matches[0].get("id"):
                     raise MCPError("Unity MCP found ambiguous instances for this project")
@@ -394,6 +398,8 @@ class UnityMCPClient:
                     if not root or Path(root).resolve() != expected:
                         raise MCPError("Unity project selection is changing; target project remains available")
                 else:
+                    if self._verified_project_root == expected:
+                        raise MCPError("Known project bridge is reconnecting during domain reload; waiting for the matching Unity Editor")
                     raise MCPError("Connected Unity Editor does not match this job's UnityProject")
             else:
                 raise MCPError("Connected Unity Editor does not match this job's UnityProject")
@@ -404,6 +410,7 @@ class UnityMCPClient:
             raise MCPError("MCP project information did not include a valid Unity version")
         if major < 2021 or (major == 2021 and minor < 3):
             raise MCPError("Connected Unity version is outside the configured compatibility range")
+        self._verified_project_root = expected
         return info
 
     @staticmethod
@@ -448,8 +455,8 @@ class UnityMCPClient:
             raise MCPError("MCP operation is outside this agent's safe action allowlist")
         root = _authorized_project_root(project_root)
         if name == "execute_menu_item" and arguments.get("menu_path") not in {
-                "Studio/Assemble prompt-driven scenes", "Studio/Assemble validated scenes"}:
-            raise MCPError("Only the existing Studio scene assemblers may be invoked")
+                "Studio/Assemble prompt-driven scenes", "Studio/Assemble validated scenes", "Studio/Build Android APK"}:
+            raise MCPError("Only the trusted Studio assembly and Android build menus may be invoked")
         self._validate_asset_paths(arguments, root)
         if name == "manage_gameobject" and action == "delete":
             if arguments.get("target") != PROBE_OBJECT_NAME:

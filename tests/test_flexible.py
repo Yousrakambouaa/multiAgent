@@ -335,9 +335,13 @@ class FlexibleWorkflowTests(unittest.IsolatedAsyncioTestCase):
         write_json(job.directory/"art_manifest.json",[])
         write_json(job.directory/"ui_plan.json", {"controls": spec.controls, "screens": [], "layout": [], "accessibility": []})
         job.data["resume_implementation"]=True
+        write_json(project/"Artifacts/runtime_checks.json", {"checks": [{"id": "drive_to_finish", "passed": True}]})
+        runner=SimpleNamespace(compile=AsyncMock(return_value={"status":"passed"}),
+            assemble=AsyncMock(return_value={"success":True}),tests=AsyncMock(return_value={"status":"passed"}))
         with patch.object(self.studio.agents["art"],"create",AsyncMock()) as art,patch.object(
                 self.studio.agents["developer"],"implement",AsyncMock()) as generate,patch.object(
-                self.studio.agents["qa"],"review_implementation",AsyncMock(side_effect=RuntimeError("stop after resume inspection"))) as review:
+                self.studio.agents["qa"],"review_implementation",AsyncMock(side_effect=RuntimeError("stop after resume inspection"))) as review,patch(
+                "studio.generation.UnityRunner",return_value=runner):
             with self.assertRaisesRegex(RuntimeError,"stop after resume inspection"):
                 await build_flexible(self.studio,SimpleNamespace(job=job),spec,project,None,False)
         art.assert_not_awaited();generate.assert_not_awaited()
@@ -393,6 +397,28 @@ class FlexibleWorkflowTests(unittest.IsolatedAsyncioTestCase):
             (project/"Artifacts/PlayMode.xml").write_text('<test-run result="Passed"><test-case fullname="PromptRuntimeTests.ExecutesEveryRequirementLinkedGameplayProbe" result="Passed"/></test-run>')
         with patch.object(runner,"run",fake_run),self.assertRaisesRegex(UnityFailure,"missing or failed"):
             await runner.tests("PlayMode")
+
+    async def test_reverification_replaces_stale_legacy_dimension_limitations(self):
+        request,spec,plan=examples("racing")
+        job=Job.create(request,2,root=self.root);self.studio.job=job
+        project=job.directory/"UnityProject"
+        save_implementation(job,project,spec,plan)
+        write_json(job.directory/"art_manifest.json",[])
+        write_json(job.directory/"validation_report.json",{
+            "limitations":["MVP supports 2D platformers only."],"old_report":True})
+        async def tests(mode):
+            if mode=="PlayMode":
+                write_json(project/"Artifacts/runtime_checks.json",{
+                    "checks":[dict(id="drive_to_finish",passed=True)]})
+            return {"status":"passed"}
+        runner=SimpleNamespace(compile=AsyncMock(return_value={"status":"passed"}),
+            assemble=AsyncMock(return_value={"success":True}),tests=tests)
+        from studio.verification import verify_flexible
+        with patch("studio.verification.UnityRunner",return_value=runner),patch(
+                "studio.verification.package",return_value=[Path("verified.zip")]):
+            report=await verify_flexible(self.studio,spec,project,None,False)
+        self.assertEqual(report["dimension"],"3D")
+        self.assertNotIn("MVP supports 2D platformers only.",report["limitations"])
 
     async def test_completed_runtime_with_visual_review_is_packaged_as_partial(self):
         request,spec,plan=examples("puzzle")
@@ -453,6 +479,56 @@ class FlexibleWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["qa_review"]["concerns"],[])
         self.assertNotIn("A scene object is missing its intended collision shape.",report["limitations"])
         self.assertEqual(report["model_quality"]["status"],"insufficient_evidence")
+
+    async def test_failed_runtime_probe_is_sent_to_qa_and_all_unity_stages_rerun(self):
+        request,spec,plan=examples("racing")
+        job=Job.create(request,2,root=self.root);self.studio.job=job
+        job.data["tasks"]=[dict(role=r,name=n,dependencies=d,status="pending") for r,n,d in TASKS]
+        project=job.directory/"UnityProject";service=SimpleNamespace(job=job)
+        original_probes=[probe.model_dump() for probe in plan.probes]
+        repaired=plan.model_copy(deep=True)
+        repaired.scripts.scripts[0].content += "\n// repaired after Unity probe failure"
+        ui=GameUIPlan(controls=spec.controls)
+        from studio.flexible import PlanReview
+
+        async def art(*args):
+            write_json(job.directory/"art_manifest.json",[])
+            return {}
+
+        playmode_calls=0
+        async def tests(mode):
+            nonlocal playmode_calls
+            if mode=="PlayMode":
+                playmode_calls += 1
+                passed=playmode_calls > 1
+                evidence={"checks":[dict(id="drive_to_finish",passed=passed,
+                    error="" if passed else "Vehicle did not reach the finish.")]}
+                write_json(project/"Artifacts/runtime_checks.json",evidence)
+                if not passed:
+                    raise UnityFailure("PlayMode","Requirement-linked runtime checks are missing or failed","qa")
+            return {"status":"passed"}
+
+        runner=SimpleNamespace(compile=AsyncMock(return_value={"status":"passed"}),
+            assemble=AsyncMock(return_value={"success":True}),tests=AsyncMock(side_effect=tests))
+        with patch.object(self.studio.agents["designer"],"plan_ui",AsyncMock(return_value=ui)),patch.object(
+                self.studio.agents["art"],"create",art),patch.object(
+                self.studio.agents["developer"],"implement",AsyncMock(return_value=plan)),patch.object(
+                self.studio.agents["qa"],"review_implementation",AsyncMock(return_value=PlanReview())),patch.object(
+                self.studio.agents["qa"],"repair_implementation",AsyncMock(return_value=repaired)) as repair,patch(
+                "studio.generation.UnityRunner",return_value=runner),patch(
+                "studio.generation.package",return_value=[Path("completed.zip")]):
+            await build_flexible(self.studio,service,spec,project,None,False)
+        self.assertEqual(runner.compile.await_count,2)
+        self.assertEqual(runner.assemble.await_count,2)
+        self.assertEqual(runner.tests.await_count,4)
+        self.assertEqual(playmode_calls,2)
+        repair.assert_awaited_once()
+        diagnostics=json.loads(repair.await_args.args[3])
+        self.assertEqual(diagnostics["failed_probe_ids"],["drive_to_finish"])
+        self.assertIn("Vehicle did not reach the finish.",json.dumps(diagnostics))
+        self.assertEqual([probe.model_dump() for probe in plan.probes],original_probes)
+        report=json.loads((job.directory/"validation_report.json").read_text())
+        self.assertEqual(report["requirements"][0]["verification_result"],"passed")
 
 
 if __name__=="__main__":unittest.main()

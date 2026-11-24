@@ -169,7 +169,8 @@ async def ensure_live_editor(job, project, timeout=None):
         client.timeout = min(90, max(client.timeout, deadline - time.monotonic()))
         await client.connect()
         remaining = max(0, deadline - time.monotonic())
-        await wait_for_project(client, project, timeout=remaining, check_cancelled=job.check_cancelled)
+        await wait_for_project(client, project, timeout=remaining, check_cancelled=job.check_cancelled,
+                               allow_startup_missing=True)
         job.event("supervisor", "unity_editor_ready", project=str(project), pid=process.pid if process else None)
     except Exception as error:
         if isinstance(error, (UnityFailure, JobCancelled)):
@@ -455,7 +456,7 @@ class UnityRunner:
         path.unlink(missing_ok=True)
         apk = safe_path(self.project, "Artifacts/prototype.apk")
         apk.unlink(missing_ok=True)
-        await self.run("android", ["-quit", "-executeMethod", "StudioSceneBuilder.BuildAndroid"], timeout=1200)
+        await self.run("android", ["-quit", "-buildTarget", "Android", "-executeMethod", "StudioSceneBuilder.BuildAndroid"], timeout=1200)
         report = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         if not report.get("success") or not apk.exists() or apk.stat().st_size < 10000:
             raise UnityFailure("android", report.get("error", "No verified APK produced"), "infrastructure")

@@ -50,6 +50,20 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*self.tasks)
         self.studio.approve.assert_awaited_once()
 
+    async def test_authorized_budget_command_updates_the_persistent_cap(self):
+        self.context.args=["20"]
+        self.studio.set_budget.return_value=20
+        await bot.budget(self.update,self.context)
+        self.studio.set_budget.assert_called_once_with("20")
+        self.assertIn("$20",self.message.reply_text.await_args.args[0])
+
+    async def test_unauthorized_budget_change_is_rejected(self):
+        self.context.args=["50"]
+        self.update.effective_user.id=7
+        await bot.budget(self.update,self.context)
+        self.studio.set_budget.assert_not_called()
+        self.message.reply_text.assert_awaited_once_with("Access denied.")
+
     async def test_every_sensitive_command_checks_authorization(self):
         self.update.effective_user.id=7
         for callback in (bot.create_game,bot.approve,bot.status,bot.plan,bot.budget,bot.cancel,bot.result):

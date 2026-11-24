@@ -1,0 +1,163 @@
+{
+  "assets": [
+    {
+      "id": "slime_sprite",
+      "kind": "sprite",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R6",
+        "R7"
+      ]
+    },
+    {
+      "id": "golden_star",
+      "kind": "sprite",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R9"
+      ]
+    },
+    {
+      "id": "enemy_sprite",
+      "kind": "sprite",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R11",
+        "R12"
+      ]
+    },
+    {
+      "id": "spike_sprite",
+      "kind": "sprite",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R10"
+      ]
+    },
+    {
+      "id": "portal_sprite",
+      "kind": "sprite",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R14"
+      ]
+    },
+    {
+      "id": "powerup_sprite",
+      "kind": "sprite",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R13"
+      ]
+    },
+    {
+      "id": "parallax_background_far",
+      "kind": "texture",
+      "path": "Assets/Studio/Art/parallax_background_far.png",
+      "width": 1024,
+      "height": 512,
+      "pixels_per_unit": 128,
+      "source": "OpenRouter image generation",
+      "model": "recraft/recraft-v4.1-flash-v2:free",
+      "prompt": "2D game production asset. Beautiful, colorful 2D cartoon candy-jungle theme with a cute squishy green slime, expressive eyes, squash-and-stretch animation, layered parallax backgrounds, decorative plants, mushrooms, and candy trees.. Consistent palette: #3DDC84, #FFD54F, #FF6F91, #7C4DFF, #4FC3F7, #FF8A65, #FFFFFF, #2E7D32, #F06292, #FFF176. Far parallax layer of a colorful magical candy jungle, cartoon 2D style, soft pastel candy trees and sky, seamless horizontal tiling.. Single asset, no text, no watermark, no sprite sheet, no collage. Wide seamless atmospheric backdrop with quiet lower foreground.",
+      "slicing": "single sprite; no sheet slicing assumed",
+      "cache_hit": true,
+      "status": "ready",
+      "requirement_ids": [
+        "R8"
+      ]
+    },
+    {
+      "id": "parallax_background_mid",
+      "kind": "texture",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R8"
+      ]
+    },
+    {
+      "id": "platform_tile",
+      "kind": "sprite",
+      "path": "Assets/Studio/Art/platform_tile.png",
+      "width": 256,
+      "height": 128,
+      "pixels_per_unit": 128,
+      "source": "OpenRouter image generation",
+      "model": "recraft/recraft-v4.1-flash-v2:free",
+      "prompt": "2D game production asset. Beautiful, colorful 2D cartoon candy-jungle theme with a cute squishy green slime, expressive eyes, squash-and-stretch animation, layered parallax backgrounds, decorative plants, mushrooms, and candy trees.. Consistent palette: #3DDC84, #FFD54F, #FF6F91, #7C4DFF, #4FC3F7, #FF8A65, #FFFFFF, #2E7D32, #F06292, #FFF176. Candy-jungle platform tile, colorful cartoon 2D style, grass and candy texture, suitable for tiling.. Single asset, no text, no watermark, no sprite sheet, no collage. Wide seamless atmospheric backdrop with quiet lower foreground.",
+      "slicing": "single sprite; no sheet slicing assumed",
+      "cache_hit": true,
+      "status": "ready",
+      "requirement_ids": [
+        "R8",
+        "R20"
+      ]
+    },
+    {
+      "id": "jump_particle",
+      "kind": "texture",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R7",
+        "R15"
+      ]
+    },
+    {
+      "id": "star_collect_particle",
+      "kind": "texture",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R15"
+      ]
+    },
+    {
+      "id": "enemy_defeat_particle",
+      "kind": "texture",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R15"
+      ]
+    },
+    {
+      "id": "portal_particle",
+      "kind": "texture",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "Image provider failed or budget/capability unavailable",
+      "requirement_ids": [
+        "R15"
+      ]
+    }
+  ]
+}

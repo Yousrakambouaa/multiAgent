@@ -40,6 +40,6 @@ namespace Studio.Runtime {
             lastHit = Time.time; Body.linearVelocity = Vector2.zero; transform.position = spawn;
             if (director != null) director.ShowHint("Try again — follow the trail!");
         }
-        void OnDisable() { TouchPad.Reset(); }
+        void OnDisable() { TouchPad.ResetState(); }
     }
 }

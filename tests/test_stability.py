@@ -24,8 +24,12 @@ from studio.unity import UnityRunner
 
 
 def text_model(mid, price="0", context=65536, **extra):
-    return dict(id=mid, pricing={"prompt":price,"completion":price},
-                supported_parameters=["response_format"], context_length=context, **extra)
+    model=dict(id=mid, pricing={"prompt":price,"completion":price},
+        supported_parameters=["response_format"], context_length=context,
+        architecture={"modality":"text->text","input_modalities":["text"],
+                      "output_modalities":["text"]})
+    model.update(extra)
+    return model
 
 
 class DynamicModelTests(unittest.IsolatedAsyncioTestCase):

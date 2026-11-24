@@ -9,7 +9,7 @@ namespace Studio.Runtime {
         public void OnPointerExit(PointerEventData data) { Release(); }
         public void OnCancel(BaseEventData data) { Release(); }
         void Release() { if (action == "left") Left = false; if (action == "right") Right = false; if (action == "jump") Jump = false; }
-        public static void Reset() { Left = Right = Jump = false; }
+        public static void ResetState() { Left = Right = Jump = false; }
         void OnDisable() { Release(); }
     }
 }

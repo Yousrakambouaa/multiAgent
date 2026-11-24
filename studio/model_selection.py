@@ -27,6 +27,9 @@ def rank_key(model, role, evidence, price, preference):
         return (1 + sum(r["passed"] for r in items)) / (2 + len(items))
     caps = capabilities(model)
     context = caps["context_length"] or 0
-    reasoning_fit = caps["reasoning"] if role in ("supervisor", "designer", "qa") else False
-    return (-rate(verified), -rate(contracts), -rate(availability), -int(bool(reasoning_fit)),
-            -min(context, 131072), price, preference)
+    reasoning_fit = caps["reasoning"] if role in ("supervisor", "designer", "developer", "scene", "qa") else False
+    # Once required context/output fit, a larger context window is not evidence
+    # of better code. Honor task-specific preferences among equally measured
+    # models rather than letting a cheap general model displace coding profiles.
+    return (-rate(verified), -rate(contracts), -rate(availability), preference,
+            -int(bool(reasoning_fit)), -min(context, 131072), price)
