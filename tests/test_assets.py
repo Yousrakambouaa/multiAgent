@@ -52,5 +52,23 @@ class AssetTests(unittest.IsolatedAsyncioTestCase):
         await ArtDesigner().create(self.service,demo_spec(),self.root/"cached_project")
         self.service.post.assert_not_called()
 
+    async def test_resume_reuses_saved_sprite_even_without_shared_cache(self):
+        spec = demo_spec()
+        spec.required_assets = [next(a for a in spec.required_assets if a.kind == "player")]
+        asset = spec.required_assets[0]
+        target = self.project / "Assets/Studio/Art" / (asset.id + ".png")
+        target.parent.mkdir(parents=True)
+        Image.new("RGBA", (32, 32), (10, 20, 30, 0)).save(target)
+        original = target.read_bytes()
+        entry = dict(id=asset.id, kind=asset.kind, status="ready", path=target.relative_to(self.project).as_posix(),
+                     source="OpenRouter image generation", model="saved-model")
+        (self.job.directory / "art_manifest.json").write_text(json.dumps([entry]))
+        self.job.data["resume_inputs"] = True
+        result = await ArtDesigner().create(self.service, spec, self.project)
+        self.assertEqual(result["player"], entry["path"])
+        self.assertEqual(target.read_bytes(), original)
+        self.service.post.assert_not_awaited()
+        self.registry.candidates.assert_not_called()
+
 
 if __name__=="__main__":unittest.main()

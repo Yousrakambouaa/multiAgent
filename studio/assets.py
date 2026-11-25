@@ -25,10 +25,28 @@ class ArtDesigner:
         result = {}
         manifest = []
         reference = None
+        saved_path = service.job.directory / "art_manifest.json"
+        saved_assets = {}
+        if service.job.data.get("resume_inputs") and saved_path.is_file():
+            saved_assets = {entry["id"]: entry for entry in json.loads(saved_path.read_text(encoding="utf-8"))
+                            if entry.get("path") and entry.get("status", "ready") == "ready"}
         rejected_requests = getattr(service, "image_request_failures", {})
         service.image_request_failures = rejected_requests
         for asset in spec.required_assets:
             service.job.check_cancelled()
+            saved = saved_assets.get(asset.id)
+            if saved:
+                target = safe_path(project, saved["path"])
+                if target.is_file():
+                    with Image.open(target) as check:
+                        check.verify()
+                    manifest.append(saved)
+                    result[asset.kind] = saved["path"]
+                    if asset.kind == "player" and saved.get("source") == "OpenRouter image generation":
+                        reference = "data:image/png;base64," + base64.b64encode(target.read_bytes()).decode("ascii")
+                    service.job.event("art", "asset_reused", asset=asset.id, source=saved.get("source"))
+                    write_json(saved_path, manifest)
+                    continue
             prompt = (f"2D game production asset. {spec.art_style}. Consistent palette: {', '.join(spec.palette)}. "
                       f"{asset.prompt}. Single asset, no text, no watermark, no sprite sheet, no collage. "
                       + ("Transparent background, centered silhouette with empty margins." if asset.transparent
@@ -105,6 +123,8 @@ class ArtDesigner:
                                           error=str(error)[:500] if isinstance(error,RuntimeError) else type(error).__name__)
                         if isinstance(error,ServiceRejected) and error.status in (401,402,403):
                             service.job.data["image_service_blocked"] = str(error)
+                            identity = getattr(service.registry, "_identity", None)
+                            service.job.data["image_service_blocked_key"] = identity if isinstance(identity, str) else None
                             service.job.save()
                             break
                 if image is None:

@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import os
+import time
 
 import httpx
 
@@ -10,6 +11,7 @@ from studio.state import JobCancelled
 from studio.providers import AIProvider, provider_response_message, redact_provider_message
 
 REQUEST_TIMEOUT_SECONDS = float(os.environ.get("STUDIO_API_TIMEOUT_SECONDS", "300"))
+OPENROUTER_TIMEOUT_SECONDS = float(os.environ.get("OPENROUTER_REQUEST_TIMEOUT_SECONDS", "180"))
 
 
 class RequestDeadlineExceeded(httpx.ReadTimeout):
@@ -17,12 +19,13 @@ class RequestDeadlineExceeded(httpx.ReadTimeout):
 
 
 class ServiceRejected(RuntimeError):
-    def __init__(self, status, message, retry_after=None, provider_code=None, request_id=None):
+    def __init__(self, status, message, retry_after=None, provider_code=None, request_id=None, limit_source=None):
         super().__init__(message)
         self.status = status
         self.retry_after = retry_after
         self.provider_code = provider_code
         self.request_id = request_id
+        self.limit_source = limit_source
 
 
 class ResponseInvalid(RuntimeError):
@@ -61,12 +64,14 @@ def affordable_retry_limit(error, requested_tokens):
     return reduced if 256 <= reduced < requested_tokens else None
 
 
-def credential_rejection(error):
+def credential_rejection(error, allow_credit_fallback=False):
     if not isinstance(error, ServiceRejected):
         return False
     if error.status == 401:
         return True
     if error.status != 403:
+        return False
+    if allow_credit_fallback and credit_rejection(error):
         return False
     text = str(error).casefold()
     model_specific = ("model" in text and any(marker in text for marker in (
@@ -74,6 +79,12 @@ def credential_rejection(error):
         "not authorized to use model", "model denied")))
     return not model_specific and any(marker in text for marker in (
         "api key", "credential", "authentication", "user not found", " denied"))
+
+
+def credit_rejection(error):
+    return isinstance(error, ServiceRejected) and (
+        error.status == 402 or error.status == 403 and any(marker in str(error).casefold()
+        for marker in ("key limit exceeded", "credit", "budget", "weekly limit", "daily limit", "monthly limit")))
 
 
 def decode_json_response(data):
@@ -111,12 +122,53 @@ class ModelService:
     def __init__(self, registry, job):
         self.registry, self.job = registry, job
         self.provider = getattr(registry, "provider", None) or AIProvider()
-        if self.provider.name == "openrouter" and job.data.get("openrouter_free_only"):
+        if (self.provider.name == "openrouter" and job.data.get("openrouter_free_only")
+                and job.data.get("openrouter_restricted_key") == getattr(registry, "_identity", None)):
             registry.free_only = True
         self.ledger = Ledger(job)
+        if self.provider.name == "openrouter" and isinstance(getattr(registry, "allowance", None), dict):
+            self.ledger.bind_allowance(registry.allowance)
+        self._allowance_checked = 0
         self._mcp_unavailable = False
         self.selected_models = {}
         self.contract_failures = {}
+        blocks = job.data.get("openrouter_model_blocks", {})
+        if (self.provider.name == "openrouter" and blocks.get("identity") == getattr(registry, "_identity", None)
+                and hasattr(registry, "unavailable")):
+            for model, until in blocks.get("until", {}).items():
+                if until > time.time():
+                    registry.unavailable.add(model)
+                    registry.unavailable_until[model] = until
+        self.clear_stale_restrictions()
+
+    def clear_stale_restrictions(self):
+        if self.provider.name != "openrouter":
+            return
+        identity = getattr(self.registry, "_identity", None)
+        for flag, key in (("openrouter_free_only", "openrouter_restricted_key"),
+                          ("image_service_blocked", "image_service_blocked_key")):
+            if self.job.data.get(flag) and self.job.data.get(key) != identity:
+                self.job.data.pop(flag, None)
+                self.job.data.pop(key, None)
+
+    async def refresh_budget(self, force=False):
+        # Only a verified OpenRouter registry can perform metadata requests.
+        # Dahl and offline/injected registries retain their existing behavior.
+        if self.provider.name != "openrouter" or not getattr(self.registry, "_identity", None):
+            return
+        if force or time.monotonic() - self._allowance_checked >= 2:
+            from studio.registry import ProviderCatalogError
+            try:
+                await self.registry.refresh_allowance()
+            except (httpx.HTTPError, ProviderCatalogError) as error:
+                if getattr(error, "status", None) in (401, 403):
+                    raise
+                self.job.event("supervisor", "allowance_lookup_unavailable", error=type(error).__name__)
+                # Keep the previous bound and all reservations when lookup fails.
+            self._allowance_checked = time.monotonic()
+        if isinstance(getattr(self.registry, "allowance", None), dict):
+            self.clear_stale_restrictions()
+            self.ledger.bind_allowance(self.registry.allowance)
 
     def record_validation(self, role, passed):
         model = self.selected_models.get(role)
@@ -176,17 +228,19 @@ class ModelService:
 
     async def post(self, route, payload, role, model, ceiling):
         self.job.check_cancelled()
+        await self.refresh_budget()
         key = self.provider.api_key()
         entry = self.ledger.reserve(role, model, ceiling)
         self.job.event(role, "api_call", model=model, reserved_usd=ceiling)
+        timeout = min(REQUEST_TIMEOUT_SECONDS, OPENROUTER_TIMEOUT_SECONDS) if self.provider.name == "openrouter" else REQUEST_TIMEOUT_SECONDS
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(180, connect=20)) as client:
                 try:
                     response = await asyncio.wait_for(client.post(self.provider.base_url + "/" + route,
-                        headers={"Authorization": "Bearer " + key}, json=payload), timeout=REQUEST_TIMEOUT_SECONDS)
+                        headers={"Authorization": "Bearer " + key}, json=payload), timeout=timeout)
                 except asyncio.TimeoutError as error:
                     raise RequestDeadlineExceeded(
-                        f"{self.provider.label} {role} request timed out after the {REQUEST_TIMEOUT_SECONDS:g}s "
+                        f"{self.provider.label} {role} request timed out after the {timeout:g}s "
                         "total deadline; provider keepalives cannot extend it") from error
                 try:
                     data = response.json()
@@ -199,12 +253,18 @@ class ModelService:
                     raise ResponseInvalid(f"{self.provider.label} response must be an object")
                 if not response.is_success or data.get("error"):
                     # Preserve provider diagnostics while redacting credentials.
-                    entry["status"] = "failed_or_unknown_charge"
-                    self.job.save()
                     provider_error = data.get("error")
                     code = provider_error.get("code") if isinstance(provider_error, dict) else None
                     status = (int(code) if response.is_success and str(code).isdigit()
                               else response.status_code)
+                    if self.provider.name == "openrouter" and not data.get("choices"):
+                        if isinstance(data.get("usage"), dict) and data["usage"].get("cost") is not None:
+                            self.ledger.settle(entry, data["usage"])
+                        elif not response.is_success and status in (400, 401, 402, 403, 404, 422, 429):
+                            self.ledger.rejected(entry)
+                    if entry["status"] == "pending":
+                        entry["status"] = "failed_or_unknown_charge"
+                        self.job.save()
                     message = provider_response_message(response)
                     if status == 401:
                         message = (self.provider.authentication_error() + " Provider response: " + message)
@@ -215,8 +275,16 @@ class ModelService:
                     request_id = response.headers.get("x-request-id") or response.headers.get("x-openrouter-request-id")
                     if request_id:
                         request_id = redact_provider_message(request_id)[:120]
-                    raise ServiceRejected(status, f"{self.provider.label} error {status} for {model}: {message}",
-                                          retry_after, provider_code=code, request_id=request_id)
+                    rejection = ServiceRejected(status, f"{self.provider.label} error {status} for {model}: {message}",
+                                          retry_after, provider_code=code, request_id=request_id,
+                                          limit_source=(provider_error.get("metadata") or {}).get("limit_source")
+                                          if isinstance(provider_error, dict) else None)
+                    if self.provider.name == "openrouter" and route == "images" and credit_rejection(rejection):
+                        self.registry.free_only = True
+                        self.job.data.update(openrouter_free_only=True,
+                            openrouter_restricted_key=getattr(self.registry, "_identity", None))
+                        self.job.save()
+                    raise rejection
             self.ledger.settle(entry, data.get("usage", {}))
             self.job.check_cancelled()
             return data
@@ -227,6 +295,7 @@ class ModelService:
             raise
 
     async def json(self, role, system, value, max_tokens=5000):
+        await self.refresh_budget()
         # Frameworks keep using the same metered gateway. Observations are data,
         # never instructions, model-selected commands, or arbitrary MCP arguments.
         owner = {"ui": "designer", "scene": "developer"}.get(role, role)
@@ -242,7 +311,7 @@ class ModelService:
         errors = []
         discovered = list(self.registry.candidates(role))
         candidates = list(self.registry.candidates(
-            role, messages, max_tokens, float(self.ledger.remaining)))
+            role, messages, max_tokens, float(self.ledger.request_budget(role))))
         rejected = self.contract_failures.get(role, set())
         # A JSON envelope is not a valid game implementation. Try an unfailed
         # eligible model before asking the same model to correct itself again.
@@ -272,7 +341,7 @@ class ModelService:
             raise ModelAttemptsFailed(self.provider.label, role, [],
                 f"No text-only JSON model is eligible for {role} from the selected provider/account. "
                 f"Check {config}, model access and output capabilities, then run main.py models.")
-        free_only = bool(self.job.data.get("openrouter_free_only"))
+        free_only = bool(getattr(self.registry, "free_only", False)) if self.provider.name == "openrouter" else False
         previous_model = None
         last_error = ""
         model_index = 0
@@ -280,7 +349,7 @@ class ModelService:
         while model_index < len(candidates):
             model = candidates[model_index]
             model_index += 1
-            if free_only and not model.endswith(":free"):
+            if free_only and not (self.registry._is_free(model) if hasattr(self.registry, "_is_free") else model.endswith(":free")):
                 continue
             if previous_model:
                 self.job.event(role, "model_fallback", provider=self.provider.name,
@@ -293,7 +362,19 @@ class ModelService:
             transient_retry_used = False
             token_retry_used = False
             truncated_retry_used = False
+            json_retry_used = False
             for _attempt in range(3):
+                await self.refresh_budget()
+                if self.provider.name == "openrouter" and hasattr(self.registry, "output_limit"):
+                    from studio.registry import minimum_output
+                    fitted = self.registry.output_limit(model, messages, request_max_tokens,
+                        float(self.ledger.request_budget(role)), min_tokens=minimum_output(role, request_max_tokens))
+                    if fitted is None:
+                        budget_blocked = True
+                        last_error = "model cannot fit its minimum useful output within the effective allowance"
+                        errors.append({"model": model, "kind": "budget_limit", "reason": last_error})
+                        break
+                    request_max_tokens = fitted
                 if hasattr(self.registry, "request_fits") and not self.registry.request_fits(model, messages, request_max_tokens):
                     detail = "context or output limit is too small for this request"
                     errors.append({"model": model, "kind": "request_limit", "reason": detail})
@@ -311,19 +392,12 @@ class ModelService:
                                    reason=detail, reserved_usd=ceiling,
                                    remaining_usd=float(self.ledger.remaining))
                     break
-                if not self.ledger.can_reserve(ceiling):
-                    detail = "request reservation does not fit the remaining job budget"
-                    errors.append({"model": model, "kind": "budget_limit", "reason": detail})
-                    last_error = detail
-                    budget_blocked = True
-                    self.job.event(role, "model_skipped", provider=self.provider.name, model=model,
-                                   reason=detail, reserved_usd=ceiling,
-                                   remaining_usd=float(self.ledger.remaining))
-                    break
                 payload = {
                         "model": model, "messages": messages, "max_tokens": request_max_tokens,
                         "response_format": {"type": "json_object"},
                     }
+                if model in getattr(self.registry, "json_disabled", set()):
+                    payload.pop("response_format", None)
                 supported = self.registry.models.get(model, {}).get("supported_parameters")
                 if supported is None or "temperature" in supported:
                     payload["temperature"] = 0.2
@@ -359,7 +433,14 @@ class ModelService:
                         self.registry.record_outcome(model, role, True, kind="availability")
                     self.job.event(role, "model_response_validated", provider=self.provider.name, model=model)
                     return result
-                except (BudgetExceeded, JobCancelled):
+                except BudgetExceeded as error:
+                    if self.provider.name != "openrouter" or self.job.data.get("budget_halted"):
+                        raise
+                    budget_blocked = True
+                    last_error = str(error)
+                    errors.append({"model": model, "kind": "budget_limit", "reason": last_error})
+                    break
+                except JobCancelled:
                     raise
                 except Exception as error:
                     if isinstance(error, (ServiceRejected, ResponseInvalid)):
@@ -385,7 +466,17 @@ class ModelService:
                                    status=getattr(error, "status", None),
                                    request_id=getattr(error, "request_id", None))
                     excluded_availability = (isinstance(error, ServiceRejected) and
-                                             (error.status in (401, 402) or credential_rejection(error)))
+                        (error.status in (401, 402) or
+                         self.provider.name == "openrouter" and credit_rejection(error) or
+                         credential_rejection(error, self.provider.name == "openrouter")))
+                    if (self.provider.name == "openrouter" and isinstance(error, ServiceRejected)
+                            and error.status in (400, 422) and not json_retry_used
+                            and "response_format" in payload
+                            and any(marker in str(error).casefold() for marker in ("response_format", "json mode", "json_object"))):
+                        json_retry_used = True
+                        self.registry.json_disabled.add(model)
+                        self.job.event(role, "json_mode_retry", model=model, response_format=False)
+                        continue
                     if hasattr(self.registry, "record_outcome") and not excluded_availability:
                         self.registry.record_outcome(model, role, False,
                             kind="contract" if isinstance(error, ResponseInvalid) else "availability")
@@ -416,7 +507,7 @@ class ModelService:
                                        requested_tokens=request_max_tokens, retry_tokens=reduced_limit)
                         request_max_tokens = reduced_limit
                         continue
-                    if credential_rejection(error):
+                    if credential_rejection(error, self.provider.name == "openrouter"):
                         raise ModelAttemptsFailed(self.provider.label, role, errors,
                             "The provider rejected credentials or account access; model switching cannot fix this.",
                             fallback_blocked=True) from error
@@ -424,24 +515,32 @@ class ModelService:
                         raise ModelAttemptsFailed(self.provider.label, role, errors,
                             "The selected provider rejected the request for billing or credit reasons.",
                             fallback_blocked=True) from error
-                    if (self.provider.name == "openrouter" and isinstance(error, ServiceRejected) and error.status == 402
-                            and os.environ.get("STUDIO_PAID_ONLY", "0") != "1"):
+                    in_flight = (self.provider.name == "openrouter" and isinstance(error, ServiceRejected) and
+                                 error.limit_source == "openrouter_in_flight_budget")
+                    if self.provider.name == "openrouter" and credit_rejection(error) and not in_flight:
+                        await self.refresh_budget(force=True)
                         # A credit rejection may still be recoverable through an eligible free model.
                         previous_free_only = getattr(self.registry, "free_only", False)
                         self.registry.free_only = True
                         free_models = [mid for mid in self.registry.candidates(
                             role, messages, request_max_tokens, float(self.ledger.remaining))
-                                       if mid.endswith(":free")]
+                                       if (self.registry._is_free(mid) if hasattr(self.registry, "_is_free") else mid.endswith(":free"))]
                         self.registry.free_only = previous_free_only
                         if free_models:
                             free_only = True
                             self.job.data["openrouter_free_only"] = True
+                            self.job.data["openrouter_restricted_key"] = getattr(self.registry, "_identity", None)
                             self.registry.free_only = True
                             self.job.save()
                             for fallback in free_models:
                                 if fallback not in candidates:
                                     candidates.append(fallback)
+                        else:
+                            raise ModelAttemptsFailed(self.provider.label, role, errors,
+                                "Available key credits cannot cover a suitable model; saved assets and stages are preserved.",
+                                fallback_blocked=True) from error
                     transient = isinstance(error, ServiceRejected) and error.status in (408, 429, 500, 502, 503, 504)
+                    transient = transient or in_flight
                     # Every retry gets a fresh persisted reservation. Unknown charges stay reserved.
                     delay = getattr(error, "retry_after", None) or 1
                     if (not transient_retry_used and not isinstance(error, RequestDeadlineExceeded)
@@ -451,6 +550,17 @@ class ModelService:
                         self.job.check_cancelled()
                         await asyncio.sleep(delay)
                         continue
+                    if in_flight:
+                        raise ModelAttemptsFailed(self.provider.label, role, errors,
+                            "OpenRouter has pending requests against its in-flight budget; saved progress is preserved.",
+                            fallback_blocked=True) from error
+                    if (self.provider.name == "openrouter" and hasattr(self.registry, "unavailable")
+                            and not credit_rejection(error)):
+                        self.registry.block_model(model)
+                        self.job.data["openrouter_model_blocks"] = {
+                            "identity": getattr(self.registry, "_identity", None),
+                            "until": dict(self.registry.unavailable_until)}
+                        self.job.save()
                     break
         if budget_blocked:
             details = "; ".join(f"{item['model']}: {item['reason']}" for item in errors)

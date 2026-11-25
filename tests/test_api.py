@@ -75,7 +75,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
                                          httpx.Response(200, json=completion())])
         self.assertEqual(result, {"ok": True})
         self.assertEqual(len(self.job.data["costs"]), 2)
-        self.assertEqual(self.job.data["costs"][0]["status"], "failed_or_unknown_charge")
+        self.assertEqual(self.job.data["costs"][0]["status"], "settled")
+        self.assertEqual(self.job.data["costs"][0]["charged_usd"], 0)
         self.assertEqual(self.requests[0]["model"], self.requests[1]["model"])
         self.assertEqual(self.requests[0]["provider"]["max_price"], {"prompt": 0, "completion": 0})
         self.assertEqual(self.requests[0]["reasoning"], {"enabled": False})
@@ -93,6 +94,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_null_answer_and_non_json_envelope_fall_back(self):
         for response in [httpx.Response(200, json=completion(None)), httpx.Response(200, text="not JSON")]:
             self.requests.clear()
+            self.service.registry.unavailable.clear()
             result = await self.run_replies([response, httpx.Response(200, json=completion())])
             self.assertEqual(result, {"ok": True})
             self.assertEqual([r["model"] for r in self.requests], ["one", "two"])
@@ -120,15 +122,16 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.job.data["costs"][0]["status"], "failed_or_unknown_charge")
         self.assertEqual(self.job.data["costs"][0]["charged_usd"], .01)
 
-    async def test_paid_only_policy_never_uses_free_credit_fallback(self):
+    async def test_legacy_paid_only_flag_does_not_block_free_credit_fallback(self):
         registry = self.service.registry
         registry.models["one"]["pricing"] = {"prompt": ".000001", "completion": ".000001"}
         registry.models["two:free"] = registry.models.pop("two")
         registry.roles = {"designer": ["one", "two:free"]}
         with patch.dict(os.environ, {"STUDIO_PAID_ONLY": "1", "STUDIO_ALLOW_PAID_MODELS": "1"}):
-            with self.assertRaises(ModelAttemptsFailed):
-                await self.run_replies([httpx.Response(402, json={"error": {"message": "Insufficient credits"}})])
-        self.assertEqual([request["model"] for request in self.requests], ["one"])
+            result = await self.run_replies([httpx.Response(402, json={"error": {"message": "Insufficient credits"}}),
+                                             httpx.Response(200, json=completion())])
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual([request["model"] for request in self.requests], ["one", "two:free"])
 
     async def test_auth_error_inside_http_200_stops_and_redacts_credentials(self):
         with self.assertRaisesRegex(RuntimeError, "403") as failure:
@@ -170,22 +173,29 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_credit_rejection_falls_back_only_to_available_free_model(self):
         registry=self.service.registry
         registry.models["free:free"]=registry.models["one"]
+        registry.models["one"] = {**registry.models["one"], "pricing": {"prompt": "0", "completion": ".000001"}}
+        registry.models["two"] = registry.models["one"]
         registry.roles["designer"].append("free:free")
         result=await self.run_replies([httpx.Response(402,json={"error":{"message":"Insufficient credits"}}),
                                       httpx.Response(200,json=completion())])
         self.assertEqual(result,{"ok":True})
         self.assertEqual([r["model"] for r in self.requests],["one","free:free"])
 
-    async def test_budget_prevents_retry_network_call(self):
-        self.job.data["cap_usd"] = .0001
+    async def test_uncertain_charge_prevents_retry_network_call(self):
+        self.job.data["cap_usd"] = .0002
+        self.service.registry.roles = {"designer": ["one"]}
+        self.service.registry.models = {"one": {**self.service.registry.models["one"],
+            "pricing": {"prompt": "0", "completion": ".000001"}}}
         self.job.save()
         with self.assertRaises(BudgetExceeded):
-            await self.run_replies([httpx.Response(429, json={"error": {"message": "busy"}})])
+            await self.run_replies([httpx.Response(503, json={"error": {"message": "busy"}})])
         self.assertEqual(len(self.requests), 1)
 
     async def test_credit_restriction_persists_for_later_agent_calls(self):
         registry=self.service.registry
         registry.models["free:free"]=registry.models["one"]
+        registry.models["one"] = {**registry.models["one"], "pricing": {"prompt": "0", "completion": ".000001"}}
+        registry.models["two"] = registry.models["one"]
         registry.roles["designer"].append("free:free")
         await self.run_replies([httpx.Response(402,json={"error":{"message":"Insufficient credits"}}),
                                 httpx.Response(200,json=completion())])

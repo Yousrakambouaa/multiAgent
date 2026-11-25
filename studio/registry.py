@@ -3,15 +3,20 @@ import json
 import os
 import math
 import hashlib
+import time
 from datetime import datetime, timezone
 
 import httpx
 
 from studio.config import CACHE, ROOT
 from studio.state import write_json
-from studio.openrouter import api_key, authentication_error, validate_inference_key
+from studio.openrouter import api_key, authentication_error, validate_inference_key, key_allowance
 from studio.providers import AIProvider, provider_response_message, redact_provider_message
 from studio.model_selection import capabilities, rank_key
+
+
+def minimum_output(role, requested):
+    return min(requested, 4096 if role in ("developer", "scene") else 2048 if role == "qa" else 1024)
 
 DEFAULTS = {
     "supervisor": ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol", "anthropic/claude-sonnet-5.5"],
@@ -78,10 +83,59 @@ class Registry:
         self.free_only = os.environ.get("STUDIO_FREE_ONLY", "0") == "1"
         self.evidence = {}
         self._identity = None
+        self.allowance = None
+        self.unavailable = set()
+        self.unavailable_until = {}
+        self.json_disabled = set()
 
     def dynamic(self):
+        if self.provider.name == "openrouter":
+            return True
         return (os.environ.get("STUDIO_MODEL_SELECTION", "dynamic") == "dynamic"
                 and os.environ.get("STUDIO_AUTO_MODEL_FALLBACK", "1") == "1")
+
+    def block_model(self, model, seconds=300):
+        self.unavailable.add(model)
+        self.unavailable_until[model] = time.time() + seconds
+
+    def is_unavailable(self, model):
+        if model in self.unavailable_until and self.unavailable_until[model] <= time.time():
+            self.unavailable_until.pop(model)
+            self.unavailable.discard(model)
+        return model in self.unavailable
+
+    def _set_allowance(self, metadata, credits, observed_at):
+        snapshot = key_allowance(metadata, credits)
+        # Some inference keys expose a balance but no account identifier. Share
+        # that unknown scope conservatively rather than overspend across keys.
+        scope = metadata.get("workspace_id") or metadata.get("organization_id") or self.provider.base_url
+        snapshot.update(provider="openrouter", identity=self._identity,
+                        scope=hashlib.sha256(str(scope).encode()).hexdigest(), observed_at=observed_at)
+        self.allowance = snapshot
+
+    async def refresh_allowance(self):
+        if self.provider.name != "openrouter":
+            return
+        started = time.time()
+        headers = {"Authorization": "Bearer " + self.provider.api_key()}
+        identity = hashlib.sha256((self.provider.base_url + "\0" + self.provider.api_key()).encode()).hexdigest()
+        if identity != self._identity:
+            await self.refresh()
+            return
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await _catalog_get(client, self.provider.base_url + "/key", headers,
+                                          self.provider.label, "key allowance lookup")
+            _require_catalog_success(response, self.provider.label, "key allowance lookup")
+            metadata = _catalog_json(response, self.provider.label, "key allowance lookup").get("data")
+            validate_inference_key(metadata)
+            credits = None
+            try:
+                response = await client.get(self.provider.base_url + "/credits", headers=headers)
+                if response.is_success:
+                    credits = response.json().get("data")
+            except (httpx.HTTPError, ValueError):
+                pass  # Some inference keys cannot read account credits.
+            self._set_allowance(metadata, credits, started)
 
     def capability_summary(self):
         return {"provider": self.provider.name, "image_generation": bool(list(self.candidates("art"))),
@@ -123,7 +177,13 @@ class Registry:
         self.free_only = os.environ.get("STUDIO_FREE_ONLY", "0") == "1"
         # Both catalog and performance evidence are scoped to provider URL/key.
         key = self.provider.api_key()
-        self._identity = hashlib.sha256((self.provider.base_url + "\0" + key).encode()).hexdigest()
+        identity = hashlib.sha256((self.provider.base_url + "\0" + key).encode()).hexdigest()
+        if identity != self._identity:
+            self.unavailable.clear()
+            self.unavailable_until.clear()
+            self.json_disabled.clear()
+        self._identity = identity
+        self.allowance = None
         try:
             self.evidence = json.loads((CACHE / ("model_evidence_" + self._identity + ".json")).read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -135,6 +195,7 @@ class Registry:
             return
         headers = {"Authorization": "Bearer " + api_key()}
         async with httpx.AsyncClient(timeout=40) as client:
+            observed_at = time.time()
             # Validate the key without a completion or a spending reservation.
             response = await _catalog_get(client, "https://openrouter.ai/api/v1/key", headers,
                                           self.provider.label, "model key verification")
@@ -142,8 +203,16 @@ class Registry:
                 raise RuntimeError(authentication_error() + " Provider response: "
                                    + provider_response_message(response))
             _require_catalog_success(response, self.provider.label, "model catalog lookup")
-            validate_inference_key(_catalog_json(response, self.provider.label,
-                                                 "model key verification").get("data"))
+            metadata = _catalog_json(response, self.provider.label, "model key verification").get("data")
+            validate_inference_key(metadata)
+            credits = None
+            try:
+                credit_response = await client.get(self.provider.base_url + "/credits", headers=headers)
+                if credit_response.is_success:
+                    credits = credit_response.json().get("data")
+            except (httpx.HTTPError, ValueError):
+                pass
+            self._set_allowance(metadata, credits, observed_at)
             # Always check current credentials; cached model data never bypasses it.
             if self._cached_catalog():
                 return
@@ -160,7 +229,7 @@ class Registry:
                                            "response did not contain a model list")
             self.models = {m["id"]: m for m in catalog if isinstance(m, dict) and isinstance(m.get("id"), str)}
             image_ids = list(self.roles.get("art", []))
-            if self.dynamic() and image_ids:
+            if self.dynamic():
                 try:
                     response = await client.get(self.provider.base_url + "/images/models", headers=headers)
                     if response.is_success:
@@ -210,6 +279,9 @@ class Registry:
             if messages is None or max_tokens is None:
                 return True
             try:
+                if self.provider.name == "openrouter" and max_cost_usd is not None:
+                    return self.output_limit(mid, messages, max_tokens, max_cost_usd,
+                                             min_tokens=minimum_output(role, max_tokens)) is not None
                 if not self.request_fits(mid, messages, max_tokens):
                     return False
                 return (max_cost_usd is None or
@@ -224,12 +296,10 @@ class Registry:
             available = list(self.images) if self.dynamic() else configured
             eligible = []
             for mid in available:
-                if mid not in self.images:
+                if mid not in self.images or self.is_unavailable(mid):
                     continue
                 try:
                     _, ceiling = self.image_endpoint(mid, transparent=transparent)
-                    if os.environ.get("STUDIO_PAID_ONLY", "0") == "1" and ceiling <= .0001:
-                        continue
                     eligible.append((ceiling, mid))
                 except (RuntimeError, KeyError, TypeError, ValueError):
                     continue
@@ -244,14 +314,19 @@ class Registry:
                         and self._permitted(mid, configured)]
             eligible.sort(key=lambda mid: rank_key(self.models[mid], role, self.evidence.get(mid, {}),
                 sum(self.rates(mid)), configured.index(mid) if mid in configured else len(configured)))
-            if (self.provider.name == "openrouter" and
-                    os.environ.get("STUDIO_ALLOW_PAID_MODELS", "0") == "1" and not self.free_only):
+            if self.provider.name == "openrouter" and not self.free_only:
                 paid = [mid for mid in eligible if not self._is_free(mid)]
                 free = [mid for mid in eligible if self._is_free(mid)]
-                selected = paid[:3] + free[:max(0, 4 - min(3, len(paid)))]
+                prefer_free = self.allowance and (self.allowance.get("remaining_usd") == 0 or self.allowance.get("free_tier"))
+                selected = (free[:3] + paid[:1]) if prefer_free else (paid[:3] + free[:1])
                 if len(selected) < 4:
-                    selected.extend(paid[3:3 + 4 - len(selected)])
-                yield from selected[:4]
+                    selected.extend(mid for mid in eligible if mid not in selected)
+                # Actual Unity/contract outcomes can promote a free model over
+                # paid preferences; one successful API envelope is not proof of
+                # stronger game-building quality.
+                yield from sorted(selected[:4], key=lambda mid: rank_key(
+                    self.models[mid], role, self.evidence.get(mid, {}), sum(self.rates(mid)),
+                    configured.index(mid) if mid in configured else len(configured))[:2])
             else:
                 yield from eligible[:4]
             return
@@ -261,8 +336,8 @@ class Registry:
                     and self._permitted(mid, configured)):
                 seen.add(mid)
                 yield mid
-        if (os.environ.get("STUDIO_AUTO_MODEL_FALLBACK", "1") == "1"
-                and os.environ.get("STUDIO_MODEL_FALLBACK_SCOPE", "catalog") != "configured"):
+        if (self.provider.name == "openrouter" or (os.environ.get("STUDIO_AUTO_MODEL_FALLBACK", "1") == "1"
+                and os.environ.get("STUDIO_MODEL_FALLBACK_SCOPE", "catalog") != "configured")):
             discovered = [mid for mid, model in self.models.items() if mid not in seen
                           and self._context_eligible(model) and self.text_eligible(mid)
                           and fits_request(mid)
@@ -279,10 +354,7 @@ class Registry:
         free = self._is_free(mid)
         if self.free_only:
             return free
-        if os.environ.get("STUDIO_PAID_ONLY", "0") == "1" and free:
-            return False
-        return (free or os.environ.get("STUDIO_ALLOW_PAID_MODELS", "0") == "1"
-                or (not self.dynamic() and mid in configured))
+        return True  # Account allowance and request reservations govern affordability.
 
     def _is_free(self, mid):
         prompt, completion = self.rates(mid)
@@ -293,6 +365,8 @@ class Registry:
         context = model.get("context_length")
         # Dahl's minimal /models response omits context windows. Never invent
         # a 32K limit or a quality score; backend limits remain authoritative.
+        if self.provider.name == "openrouter":
+            return bool(context and context > 0)
         return context >= 32768 if context else self.provider.name == "dahl"
 
     def request_fits(self, mid, messages, max_tokens):
@@ -306,7 +380,7 @@ class Registry:
 
     def text_eligible(self, mid):
         # Batch adapters are asynchronous jobs, not chat/completions routes.
-        if mid.endswith(":batch"):
+        if mid.endswith(":batch") or self.is_unavailable(mid):
             return False
         model = self.models.get(mid)
         if not model:
@@ -352,7 +426,22 @@ class Registry:
         request_price=float(self.models[mid]["pricing"].get("request",0))
         if not math.isfinite(request_price) or request_price < 0:
             raise ValueError("Invalid per-request fee")
-        return (len(json.dumps(messages, ensure_ascii=False).encode("utf-8")) + 1024) * prompt + max_tokens * completion + request_price + 0.0001
+        margin = 0.0001 if self.provider.name != "openrouter" or prompt or completion or request_price else 0
+        return (len(json.dumps(messages, ensure_ascii=False).encode("utf-8")) + 1024) * prompt + max_tokens * completion + request_price + margin
+
+    def output_limit(self, mid, messages, requested, budget, min_tokens=1024):
+        """Adapt output size to real context, published pricing and spendable funds."""
+        caps = capabilities(self.models[mid])
+        limit = min(requested, caps["max_completion_tokens"] or requested)
+        if caps["context_length"]:
+            limit = min(limit, caps["context_length"] - len(json.dumps(messages, ensure_ascii=False).encode("utf-8")) - 1024)
+        base = self.text_ceiling(mid, messages, 0)
+        completion = self.rates(mid)[1]
+        if base > budget:
+            return None
+        if completion:
+            limit = min(limit, int(max(0, budget - base) / completion))
+        return int(limit) if limit >= min(requested, min_tokens) else None
 
     def image_endpoint(self, mid, *, transparent=False):
         for endpoint in self.images[mid]["endpoints"]:
@@ -371,8 +460,6 @@ class Registry:
                 ceiling = sum(float(p["cost_usd"]) * (4 if p["unit"] == "megapixel" else 1) for p in prices)
                 if (math.isfinite(ceiling) and 0 <= ceiling <= 0.08
                         and all(math.isfinite(float(p["cost_usd"])) and float(p["cost_usd"]) >= 0 for p in prices)
-                        and (not self.free_only or ceiling == 0)
-                        and (ceiling == 0 or os.environ.get("STUDIO_ALLOW_PAID_MODELS", "0") == "1"
-                             or (not self.dynamic() and mid in self.roles.get("art", [])))):
-                    return endpoint, ceiling + 0.0001
+                        and (not self.free_only or ceiling == 0)):
+                    return endpoint, ceiling + (0.0001 if ceiling or self.provider.name != "openrouter" else 0)
         raise RuntimeError("No image endpoint with a bounded low-cost price")

@@ -102,7 +102,7 @@ def main():
         if name=="create": command.add_argument("description")
         if name in ("create","demo"): command.add_argument("--approve",action="store_true")
         command.add_argument("--android",action="store_true")
-        command.add_argument("--budget",type=float,help="Set the current and future API job cap (default maximum $50)")
+        command.add_argument("--budget",type=float,help="Set the current and future API job cap within the maximum configured in .env")
     for name in ("models","status","plan","cancel","mcp-status","mcp-smoke"): sub.add_parser(name)
     args=parser.parse_args()
     with ProcessLock(ROOT/".studio_cache"/"controller.lock"):

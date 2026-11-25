@@ -52,6 +52,8 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
             calls.append(request)
             if request.url.path=="/api/v1/key":
                 return httpx.Response(200,json={"data":{"label":"private-label","limit":50}})
+            if request.url.path in ("/api/v1/credits", "/api/v1/images/models"):
+                return httpx.Response(403)
             self.assertEqual(request.url.path,"/api/v1/models/user")
             return httpx.Response(200,json={"data":[model("allowed")]})
         registry=Registry();registry.roles={"designer":["forbidden","allowed"],"art":[]}
@@ -108,7 +110,8 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
                         "studio.registry.write_json"):
                     await registry.refresh()
                 self.assertEqual(list(registry.candidates("designer")),["paid-model"])
-                self.assertEqual(len(calls),2)
+                self.assertEqual([r.url.path for r in calls], ["/api/v1/key", "/api/v1/credits",
+                    "/api/v1/models/user", "/api/v1/images/models"])
 
     def test_configured_defaults_first_then_bounded_compatible_fallbacks(self):
         registry=Registry();registry.roles={"developer":["missing","preferred","preferred"]}
@@ -122,11 +125,11 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ,{"STUDIO_AUTO_MODEL_FALLBACK":"1"}):
             self.assertEqual(list(registry.candidates("developer")),["preferred","free0:free","free1:free","free2:free"])
         with patch.dict(os.environ,{"STUDIO_AUTO_MODEL_FALLBACK":"0"}):
-            self.assertEqual(list(registry.candidates("developer")),["preferred"])
+            self.assertEqual(list(registry.candidates("developer")),["preferred","free0:free","free1:free","free2:free"])
 
-    def test_paid_models_rank_first_but_keep_a_free_fallback_and_exclude_audio_outputs(self):
+    def test_quality_preferences_keep_a_free_fallback_and_exclude_audio_outputs(self):
         registry=Registry()
-        registry.roles={"developer":[]}
+        registry.roles={"developer":["premium-a", "premium-b", "premium-c", "premium-d"]}
         registry.verified_at="live"
         registry.models={
             "premium-a":model("premium-a","0.00001","0.00002"),

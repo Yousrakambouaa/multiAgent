@@ -23,6 +23,30 @@ async def run(args):
     async def notify(text):
         print(text, flush=True)
     try:
+        if getattr(args, "saved_job", None):
+            # Explicit saved-asset audit: never invoke generation or change the
+            # Telegram current-job marker. Fail closed if inference is introduced.
+            import hashlib
+            from unittest.mock import patch
+            from studio.api import ModelService
+            from studio.state import Job
+            from studio.verification import verify
+            studio = Supervisor(JOBS / "verification_runs/saved_assets")
+            studio.job = job = Job.load(safe_path(JOBS, args.saved_job) / "job.json")
+            project = job.directory / "UnityProject"
+            manifest = json.loads((job.directory / "art_manifest.json").read_text(encoding="utf-8"))
+            paths = [safe_path(project, a["path"]) for a in manifest if a.get("path")]
+            hashes = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+            costs = json.dumps(job.data["costs"], sort_keys=True)
+            with ProcessLock(JOBS / ".unity.lock"), patch.object(ModelService, "post",
+                    side_effect=AssertionError("Inference is forbidden during saved-asset verification")):
+                report = await verify(studio, notify, android=args.android)
+            result = {"job_id": job.data["id"], "status": job.data["status"], "report": report,
+                "asset_hashes_unchanged": all(hashlib.sha256(p.read_bytes()).hexdigest() == hashes[str(p)] for p in paths),
+                "asset_count": len(paths), "costs_unchanged": json.dumps(job.data["costs"], sort_keys=True) == costs,
+                "inference_allowed": False}
+            write_json(ROOT / ".studio_cache/saved_asset_verification.json", result)
+            return 0 if job.data["status"] in ("completed", "partial") and result["asset_hashes_unchanged"] and result["costs_unchanged"] else 1
         if args.unity_fixture:
             # Explicit deterministic engine audit, never presented as AI output.
             import sys
@@ -85,12 +109,16 @@ async def run(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--saved-job", help="Reassemble/test an existing job using its saved assets; inference is forbidden")
+    parser.add_argument("--android", action="store_true", help="Also build the saved game's APK")
     parser.add_argument("--unity-fixture", choices=("racing", "puzzle"), help="Real Unity checks of a deterministic test fixture; no AI calls")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--resume-fixture", help="Saved fixture job ID to reverify after package imports finish")
     args = parser.parse_args()
     if args.resume_fixture and not args.unity_fixture:
         parser.error("--resume-fixture requires --unity-fixture")
+    if args.saved_job and (args.unity_fixture or args.preflight):
+        parser.error("--saved-job cannot be combined with generation or fixture modes")
     with ProcessLock(ROOT / ".studio_cache/controller.lock"):
         return asyncio.run(run(args))
 

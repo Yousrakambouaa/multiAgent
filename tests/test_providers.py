@@ -2,7 +2,9 @@
 import json
 import asyncio
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -13,6 +15,7 @@ from studio.costs import BudgetExceeded
 from studio.model_selection import capabilities
 from studio.providers import AIProvider
 from studio.registry import DEFAULTS, Registry
+from studio.state import Job
 
 
 def completion():
@@ -122,6 +125,8 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
                    "architecture": {"modality":"text->text","input_modalities":["text"],
                                     "output_modalities":["text"]}}
                   for mid in registry.roles["designer"]]
+        for item in models[:2]:
+            item["pricing"]["completion"] = ".000001"
 
         def handle(request):
             self.assertEqual(request.url.host, "openrouter.ai")
@@ -130,21 +135,25 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, json={"data": {"is_management_key": False}})
             if request.url.path == "/api/v1/models/user":
                 return httpx.Response(200, json={"data": models})
+            if request.url.path in ("/api/v1/credits", "/api/v1/images/models"):
+                return httpx.Response(403)
             self.assertEqual(request.url.path, "/api/v1/chat/completions")
             payload = json.loads(request.content)
             self.assertEqual(payload["provider"], {"require_parameters": True,
-                                                  "max_price": {"prompt": 0, "completion": 0}})
+                "max_price": {"prompt": 0, "completion": 1 if payload["model"] == "router/paid" else 0}})
             if payload["model"] == "router/paid":
                 return httpx.Response(402, json={"error": {"message": "Insufficient credits"}})
             self.assertEqual(payload["model"], "router/free:free")
             return completion()
 
-        with self.transport(handle), patch("studio.registry.write_json") as save:
+        with tempfile.TemporaryDirectory() as temp, self.transport(handle), patch("studio.registry.write_json") as save:
+            self.job = Job.create("OpenRouter isolation test", 2, root=Path(temp))
             await registry.refresh()
             service = ModelService(registry, self.job)
             service.unity_context = AsyncMock(return_value={})
             self.assertEqual(await service.json("designer", "JSON", {}, 100), {"ok": True})
-        self.assertEqual(len(self.requests), 4)
+        self.assertEqual(len([r for r in self.requests if r.method == "POST"]), 2)
+        self.assertTrue(all(r.url.host == "openrouter.ai" for r in self.requests))
         self.assertIn("models.json", [call.args[0].name for call in save.call_args_list])
 
     async def test_all_text_tasks_use_dahl_without_openrouter_request_parameters(self):

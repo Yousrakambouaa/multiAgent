@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -15,9 +16,24 @@ def now():
 def write_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(temp, path)
+    temp = path.with_name(path.name + "." + uuid4().hex + ".tmp")
+    try:
+        temp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        for attempt in range(6):
+            try:
+                os.replace(temp, path)
+                break
+            except PermissionError as error:
+                # Windows readers/virus scanners can briefly hold the target
+                # without delete sharing. Keep the old state intact and retry.
+                if getattr(error, "winerror", None) not in (5, 32) or attempt == 5:
+                    raise
+                time.sleep(.05 * (attempt + 1))
+    finally:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 class Job:

@@ -23,6 +23,7 @@ public class PromptRuntimeTests {
     [Serializable] public class Record { public string id, error; public string[] requirement_ids; public bool passed; }
     [Serializable] public class Evidence { public Record[] checks; }
     Keyboard keyboard;
+    float previousCaptureDeltaTime;
     HashSet<Key> held=new HashSet<Key>();
     static GameObject Find(string id) {
         return UnityEngine.Object.FindObjectsByType<StudioObjectId>(FindObjectsInactive.Include,FindObjectsSortMode.None)
@@ -88,14 +89,10 @@ public class PromptRuntimeTests {
                 else if(step.value=="up") ExecuteEvents.Execute<IPointerUpHandler>(go,pointer,ExecuteEvents.pointerUpHandler);
                 else Assert.Fail("Pointer steps require value down or up");
             } else Assert.AreEqual("wait",step.action);
-            // Test runners can advance yielded frames faster than wall-clock
-            // physics time. Keep the authored frame count and also guarantee
-            // its minimum fixed-step duration so movement probes are repeatable.
-            float minimumDuration = Mathf.Max(0, step.frames) * Time.fixedDeltaTime;
-            float waitUntil = Time.realtimeSinceStartup + minimumDuration;
-            int elapsedFrames = 0;
-            do { yield return null; elapsedFrames++; }
-            while(elapsedFrames < step.frames || Time.realtimeSinceStartup < waitUntil);
+            // One authored frame advances one physics interval, regardless of
+            // Editor rendering speed. Wall-clock waits can let short animations
+            // expire on slow machines, or add extra frames on fast runners.
+            for(int i=0;i<Mathf.Max(1,step.frames);i++) yield return null;
         }
         foreach(var check in probe.assertions) {
             if(check.kind=="scene") { Assert.AreEqual(check.value,SceneManager.GetActiveScene().name); continue; }
@@ -110,12 +107,14 @@ public class PromptRuntimeTests {
                 if(check.comparison=="greater") Assert.Greater(Convert.ToDouble(value,CultureInfo.InvariantCulture),double.Parse(check.value,CultureInfo.InvariantCulture));
                 else if(check.comparison=="less") Assert.Less(Convert.ToDouble(value,CultureInfo.InvariantCulture),double.Parse(check.value,CultureInfo.InvariantCulture));
                 else if(value is float || value is double) Assert.AreEqual(double.Parse(check.value,CultureInfo.InvariantCulture),Convert.ToDouble(value,CultureInfo.InvariantCulture),.001);
-                else Assert.AreEqual(check.value.ToLowerInvariant(),Convert.ToString(value,CultureInfo.InvariantCulture).ToLowerInvariant());
+                else Assert.AreEqual(check.value.ToLowerInvariant(),Convert.ToString(value,CultureInfo.InvariantCulture).ToLowerInvariant(),check.object_id+"."+check.member);
             }
         }
         LogAssert.NoUnexpectedReceived();
     }
     [UnityTest] public IEnumerator ExecutesEveryRequirementLinkedGameplayProbe() {
+        previousCaptureDeltaTime=Time.captureDeltaTime;
+        Time.captureDeltaTime=Time.fixedDeltaTime;
         var plan=JsonUtility.FromJson<Plan>(Resources.Load<TextAsset>("studio_probes").text);
         Assert.IsNotEmpty(plan.probes);
         keyboard=InputSystem.AddDevice<Keyboard>(); keyboard.MakeCurrent();
@@ -147,6 +146,7 @@ public class PromptRuntimeTests {
         Assert.IsTrue(records.All(r=>r.passed),string.Join("\n",records.Where(r=>!r.passed).Select(r=>r.id+": "+r.error)));
     }
     [UnityTearDown] public IEnumerator Cleanup() {
+        Time.captureDeltaTime=previousCaptureDeltaTime;
         if(keyboard!=null) InputSystem.RemoveDevice(keyboard);
         held.Clear(); Time.timeScale=1; LogAssert.NoUnexpectedReceived(); yield return null;
     }

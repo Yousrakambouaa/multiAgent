@@ -1,5 +1,44 @@
 """Credential handling shared by discovery and metered inference."""
 import os
+from decimal import Decimal, InvalidOperation
+
+
+def _money(value):
+    try:
+        number = Decimal(str(value))
+        return number if number.is_finite() and number >= 0 else None
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def key_allowance(metadata, credits=None):
+    """Return only documented monetary bounds; unlimited is not a balance."""
+    key_bounds, account_bounds = [], []
+    remaining = _money(metadata.get("limit_remaining"))
+    if remaining is None:
+        limit = _money(metadata.get("limit"))
+        period = metadata.get("limit_reset")
+        usage = _money(metadata.get({"daily": "usage_daily", "weekly": "usage_weekly",
+                                     "monthly": "usage_monthly"}.get(period, "usage")))
+        if limit is not None and usage is not None:
+            remaining = max(Decimal(0), limit - usage)
+    if remaining is not None:
+        key_bounds.append(remaining)
+    for budget in [metadata.get("effective_budget"), *(metadata.get("budgets") or [])]:
+        if isinstance(budget, dict):
+            bound = _money(budget.get("remaining_usd"))
+            if bound is not None:
+                (account_bounds if budget.get("scope") in ("workspace", "organization") else key_bounds).append(bound)
+    if isinstance(credits, dict):
+        total, used = _money(credits.get("total_credits")), _money(credits.get("total_usage"))
+        if total is not None and used is not None:
+            account_bounds.append(max(Decimal(0), total - used))
+    bounds = key_bounds + account_bounds
+    return {"remaining_usd": float(min(bounds)) if bounds else None,
+            "key_remaining_usd": float(min(key_bounds)) if key_bounds else None,
+            "account_remaining_usd": float(min(account_bounds)) if account_bounds else None,
+            "status": "reported_bound" if bounds else "unknown",
+            "free_tier": metadata.get("is_free_tier") is True}
 
 
 def api_key():

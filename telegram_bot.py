@@ -97,7 +97,7 @@ async def budget(update,context):
         return
     job=studio.job
     await update.effective_message.reply_text((Ledger(job).summary() if job else "No job.") +
-        "\nUse /budget <dollars> to change the cap (up to $50 by default).")
+        "\nUse /budget <dollars> to change the cap within the maximum configured in .env.")
 
 
 async def cancel(update,context):

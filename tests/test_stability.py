@@ -50,10 +50,10 @@ class DynamicModelTests(unittest.IsolatedAsyncioTestCase):
         self.registry.evidence["new-model"]["developer"]=[{"kind":"unity","passed":False}]*5
         self.assertNotEqual(next(self.registry.candidates("developer")),"new-model")
 
-    def test_new_paid_models_require_opt_in_and_free_only_overrides_pins(self):
+    def test_discovered_paid_models_are_eligible_and_explicit_free_only_overrides_pins(self):
         self.registry.models={"pinned":text_model("pinned","0.000001"),
             "unknown-paid":text_model("unknown-paid","0.000001"),"free:free":text_model("free:free")}
-        self.assertNotIn("unknown-paid",list(self.registry.candidates("developer")))
+        self.assertIn("unknown-paid",list(self.registry.candidates("developer")))
         with patch.dict(os.environ,{"STUDIO_ALLOW_PAID_MODELS":"1"}):
             self.assertIn("unknown-paid",list(self.registry.candidates("developer")))
         self.registry.free_only=True
@@ -79,10 +79,11 @@ class DynamicModelTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200,json={"data":[text_model("live:free")]})
         with patch("studio.registry.httpx.AsyncClient",side_effect=lambda **kw:original(transport=httpx.MockTransport(handle))):
             await self.registry.refresh();await self.registry.refresh()
-            self.assertEqual([r.url.path for r in calls],["/api/v1/key","/api/v1/models/user","/api/v1/key"])
+            self.assertEqual([r.url.path for r in calls],["/api/v1/key", "/api/v1/credits", "/api/v1/models/user",
+                "/api/v1/images/models", "/api/v1/key", "/api/v1/credits"])
             with patch.dict(os.environ,{"OPENROUTER_API_KEY":"new-key"}):
                 await self.registry.refresh()
-        self.assertEqual(len(calls),5)
+        self.assertEqual(len(calls),10)
         self.assertNotIn("test-key",(Path(self.temp.name)/"models.json").read_text())
 
     async def test_image_catalog_discovery_and_bounded_price_are_used(self):
@@ -102,6 +103,8 @@ class DynamicModelTests(unittest.IsolatedAsyncioTestCase):
                 "studio.registry.httpx.AsyncClient",side_effect=lambda **kw:original(transport=httpx.MockTransport(handle))):
             await self.registry.refresh()
             self.assertEqual(list(self.registry.candidates("art")),["new-image"])
+        self.assertEqual(list(self.registry.candidates("art")),["new-image"])
+        self.registry.free_only=True
         self.assertEqual(list(self.registry.candidates("art")),[])
 
 

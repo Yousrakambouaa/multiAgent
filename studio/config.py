@@ -20,8 +20,8 @@ JOBS = ROOT / "jobs"
 CACHE = ROOT / ".studio_cache"
 TEMPLATES = ROOT / "studio" / "templates"
 UNITY = Path(os.environ.get("UNITY_EDITOR_PATH", r"C:\Program Files\Unity\Hub\Editor\6000.3.24f1\Editor\Unity.exe"))
-DEFAULT_CAP = float(os.environ.get("STUDIO_JOB_BUDGET_USD", "10"))
-MAX_JOB_CAP = float(os.environ.get("STUDIO_MAX_JOB_BUDGET_USD", "50"))
+DEFAULT_CAP = float(os.environ.get("MAX_JOB_BUDGET_USD", os.environ.get("STUDIO_JOB_BUDGET_USD", "10")))
+MAX_JOB_CAP = float(os.environ.get("MAX_JOB_BUDGET_USD", os.environ.get("STUDIO_MAX_JOB_BUDGET_USD", str(DEFAULT_CAP))))
 BUILD_ANDROID = os.environ.get("STUDIO_BUILD_ANDROID", "1") == "1"
 
 

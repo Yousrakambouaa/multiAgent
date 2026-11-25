@@ -36,18 +36,19 @@ class BudgetPolicyTests(unittest.TestCase):
                     validate_budget(value)
             self.assertEqual(validate_budget("50"), 50)
 
-    def test_paid_configured_policy_excludes_free_batch_and_unconfigured_models(self):
+    def test_openrouter_preferences_allow_discovery_and_free_fallback_but_exclude_batch(self):
         with patch.dict(os.environ, {"AI_PROVIDER": "openrouter", "STUDIO_ALLOW_PAID_MODELS": "1",
                 "STUDIO_FREE_ONLY": "0", "STUDIO_PAID_ONLY": "1", "STUDIO_MODEL_SELECTION": "configured",
                 "STUDIO_AUTO_MODEL_FALLBACK": "1", "STUDIO_MODEL_FALLBACK_SCOPE": "configured"}):
             registry = Registry()
+            registry.verified_at = "live"
             registry.roles = {"developer": ["paid", "paid:batch", "free:free"]}
             registry.models = {mid: {"id": mid, "context_length": 128000,
                 "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
                 "supported_parameters": ["response_format"],
                 "pricing": {"prompt": str(price), "completion": str(price)}}
                 for mid, price in (("paid", .00001), ("paid:batch", .000005), ("free:free", 0), ("other", .000001))}
-            self.assertEqual(list(registry.candidates("developer")), ["paid"])
+            self.assertEqual(list(registry.candidates("developer")), ["paid", "other", "free:free"])
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ from studio.agents import GameDesigner, QADebugger, UnityDeveloper, demo_spec
 from studio.api import ModelService
 from studio.artifacts import package
 from studio.assets import ArtDesigner
-from studio.config import BUILD_ANDROID, DEFAULT_CAP, JOBS, safe_path
+from studio.config import BUILD_ANDROID, DEFAULT_CAP, MAX_JOB_CAP, JOBS, safe_path
 from studio.costs import BudgetExceeded, Ledger, validate_budget
 from studio.registry import Registry
 from studio.request_validation import NOISE
@@ -71,7 +71,7 @@ class Supervisor:
         if not settings_path.is_file():
             return validate_budget(DEFAULT_CAP)
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        return validate_budget(settings.get("default_cap_usd", DEFAULT_CAP))
+        return validate_budget(min(float(settings.get("default_cap_usd", DEFAULT_CAP)), MAX_JOB_CAP))
 
     def set_budget(self, value, update_current=True):
         cap = validate_budget(value)

@@ -106,6 +106,8 @@ async def verify_flexible(supervisor, spec, project, notify, android):
         report["completion_status"] = "completed"
     report["costs"] = job.data["costs"]; report["cost_summary"] = Ledger(job).summary()
     package(job, project, report)
+    job.data.pop("error", None)
+    job.data.pop("failure_report", None)
     job.data["status"] = report["completion_status"]; job.event("supervisor", job.data["status"])
     await supervisor.notify(notify, "Saved prototype reverified: " + job.data["status"])
     return report

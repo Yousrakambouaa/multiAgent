@@ -116,6 +116,8 @@ def failure_type(error):
 
 def failure_report(error, job):
     kind = failure_type(error)
+    if isinstance(error, OSError):
+        kind = "Unity or machine environment"
     stage = getattr(error, "stage", "") or job.data.get("stage", "generation")
     if kind == "AI provider/model failure":
         stage = f"{getattr(error, 'role', 'agent')} model request"
