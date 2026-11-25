@@ -34,6 +34,8 @@ class ArtDesigner:
         service.image_request_failures = rejected_requests
         for asset in spec.required_assets:
             service.job.check_cancelled()
+            hybrid = service.job.data.get("model_policy") == "hybrid" and getattr(service, "hybrid", False) is True
+            generated_model = None
             saved = saved_assets.get(asset.id)
             if saved:
                 target = safe_path(project, saved["path"])
@@ -63,7 +65,8 @@ class ArtDesigner:
                 provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
                 provenance["cache_hit"] = True
             else:
-                for model in service.registry.candidates("art", transparent=asset.transparent):
+                policy = {"hybrid": True, "reference": bool(reference)} if hybrid else {}
+                for model in service.registry.candidates("art", transparent=asset.transparent, **policy):
                     if service.job.data.get("image_service_blocked"):
                         break
                     try:
@@ -102,6 +105,7 @@ class ArtDesigner:
                             raise ValueError("Provider returned an opaque image for a transparent sprite")
                         provenance = {"source": "OpenRouter image generation", "model": model, "prompt": prompt,
                                       "slicing": "single sprite; no sheet slicing assumed", "cache_hit": False}
+                        generated_model = model
                         break
                     except BudgetExceeded:
                         if service.job.data.get("budget_halted"):
@@ -114,6 +118,10 @@ class ArtDesigner:
                         image = None
                         provenance = {}
                         detail = str(error)[:700]
+                        if hybrid and not isinstance(error, ServiceRejected):
+                            service.registry.record_outcome(model, "art", False, kind="usable_image",
+                                task_id=service.job.data["id"] + ":asset:" + asset.id,
+                                reason=type(error).__name__, transparency_required=asset.transparent)
                         failures.append(detail)
                         if (isinstance(error, ServiceRejected) and error.status in (400, 404, 422)
                                 or isinstance(error, ValueError) and "opaque image" in detail):
@@ -153,6 +161,12 @@ class ArtDesigner:
                 reference="data:image/png;base64,"+base64.b64encode(target.read_bytes()).decode("ascii")
             with Image.open(target) as check:
                 check.verify()
+            if hybrid and generated_model:
+                task_id = service.job.data["id"] + ":asset:" + asset.id
+                service.registry.record_outcome(generated_model, "art", True, kind="usable_image", task_id=task_id,
+                    transparency_required=asset.transparent, reference_used="input_references" in payload, format="PNG")
+                service.job.event("art", "model_outcome", provider="openrouter", model=generated_model,
+                                  kind="usable_image", passed=True, task_id=task_id)
             manifest.append(dict(id=asset.id, kind=asset.kind, path=target.relative_to(project).as_posix(),
                                  width=size[0], height=size[1], pixels_per_unit=asset.pixels_per_unit, **provenance))
             result[asset.kind] = target.relative_to(project).as_posix()

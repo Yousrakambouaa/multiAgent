@@ -1,0 +1,65 @@
+{
+  "assets": [
+    {
+      "id": "astronaut_cat",
+      "kind": "sprite",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "No compatible image endpoint supports this asset's requested format/transparency",
+      "requirement_ids": [
+        "R02"
+      ]
+    },
+    {
+      "id": "space_background",
+      "kind": "sprite",
+      "path": "Assets/Studio/Art/space_background.png",
+      "width": 2048,
+      "height": 1024,
+      "pixels_per_unit": 100,
+      "source": "OpenRouter image generation",
+      "model": "recraft/recraft-v4.1-flash-v2:free",
+      "prompt": "2D game production asset. Polished 2D cartoon with bold outlines, soft cel shading, glowing emissive accents, and AI-generated sprite art. Consistent palette: #0B1035, #1B2A6B, #6C4DF6, #FFD75E, #FFFFFF, #8A5A3B, #FF8A3D, #3FE0FF. Deep space background with purple nebula, distant planets, tiny far stars, soft gradient, cartoon style, seamless horizontal composition. Single asset, no text, no watermark, no sprite sheet, no collage. Wide seamless atmospheric backdrop with quiet lower foreground.",
+      "slicing": "single sprite; no sheet slicing assumed",
+      "cache_hit": false,
+      "status": "ready",
+      "requirement_ids": [
+        "R03"
+      ]
+    },
+    {
+      "id": "asteroid_platform",
+      "kind": "sprite",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "No compatible image endpoint supports this asset's requested format/transparency",
+      "requirement_ids": [
+        "R04"
+      ]
+    },
+    {
+      "id": "glowing_star",
+      "kind": "sprite",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "No compatible image endpoint supports this asset's requested format/transparency",
+      "requirement_ids": [
+        "R05"
+      ]
+    },
+    {
+      "id": "finish_portal",
+      "kind": "sprite",
+      "status": "unavailable",
+      "path": "",
+      "source": "unavailable",
+      "reason": "No compatible image endpoint supports this asset's requested format/transparency",
+      "requirement_ids": [
+        "R06"
+      ]
+    }
+  ]
+}

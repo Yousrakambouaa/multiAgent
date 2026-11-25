@@ -12,21 +12,64 @@ from studio.config import CACHE, ROOT
 from studio.state import write_json
 from studio.openrouter import api_key, authentication_error, validate_inference_key, key_allowance
 from studio.providers import AIProvider, provider_response_message, redact_provider_message
-from studio.model_selection import capabilities, rank_key
+from studio.model_selection import capabilities, rank_key, value_ranking
 
 
 def minimum_output(role, requested):
     return min(requested, 4096 if role in ("developer", "scene") else 2048 if role == "qa" else 1024)
 
+
 DEFAULTS = {
-    "supervisor": ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol", "anthropic/claude-sonnet-5.5"],
-    "designer": ["anthropic/claude-sonnet-5.5", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
-    "developer": ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
-    "scene": ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
-    "qa": ["anthropic/claude-sonnet-5.5", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
-    "ui": ["anthropic/claude-sonnet-5.5", "openai/gpt-6.1-terra", "openai/gpt-5.3-codex"],
-    "art": ["bytedance-seed/seedream-5-5", "recraft/recraft-v4.1-flash", "black-forest-labs/flux.2-klein-4b"],
+    "supervisor": [
+        "deepseek/deepseek-v4.1-flash-1017",
+        "minimax/minimax-m3.1-flash",
+        "z-ai/glm-5.3-flash",
+    ],
+    "designer": [
+        "minimax/minimax-m3.1-flash",
+        "qwen/qwen3.8-flash",
+        "deepseek/deepseek-v4.1-flash-1017",
+    ],
+    "developer": [
+        "minimax/minimax-m3.1-flash",
+        "deepseek/deepseek-v4.1-flash-1017",
+        "qwen/qwen3-coder-next",
+        "z-ai/glm-5.3-flash",
+        "anthropic/claude-sonnet-5.5",
+    ],
+    "scene": [
+        "qwen/qwen3-coder-next",
+        "minimax/minimax-m3.1-flash",
+        "deepseek/deepseek-v4.1-flash-1017",
+    ],
+    "qa": [
+        "deepseek/deepseek-v4.1-flash-1017",
+        "z-ai/glm-5.3-flash",
+        "minimax/minimax-m3.1-flash",
+        "anthropic/claude-sonnet-5.5",
+    ],
+    "ui": [
+        "minimax/minimax-m3.1-flash",
+        "qwen/qwen3.8-flash",
+        "google/gemini-3.8-flash",
+    ],
+    "art": [
+        "bytedance-seed/seedream-5-5",
+        "recraft/recraft-v4.1-flash-v2",
+        "black-forest-labs/flux.2-klein-4b",
+    ],
 }
+
+
+# DEFAULTS = {
+#     "supervisor": ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol", "anthropic/claude-sonnet-5.5"],
+#     "designer": ["anthropic/claude-sonnet-5.5", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
+#     "developer": ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
+#     "scene": ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
+#     "qa": ["anthropic/claude-sonnet-5.5", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
+#     "ui": ["anthropic/claude-sonnet-5.5", "openai/gpt-6.1-terra", "openai/gpt-5.3-codex"],
+#     "art": ["bytedance-seed/seedream-5-5", "recraft/recraft-v4.1-flash", "black-forest-labs/flux.2-klein-4b"],
+# }
 
 
 class ProviderCatalogError(RuntimeError):
@@ -87,6 +130,12 @@ class Registry:
         self.unavailable = set()
         self.unavailable_until = {}
         self.json_disabled = set()
+        self.unsupported_parameters = {}
+        self.benchmarks = {}
+        self.benchmark_meta = {}
+        self._benchmarks_identity = None
+        self._benchmarks_next_check = 0
+        self.value_decisions = {}
 
     def dynamic(self):
         if self.provider.name == "openrouter":
@@ -163,13 +212,81 @@ class Registry:
         write_json(self._cache_path(), dict(cache_version=2, verified_at=self.verified_at, identity=self._identity,
                                           models=self.models, images=self.images))
 
-    def record_outcome(self, model, role, passed, kind="contract"):
+    def record_outcome(self, model, role, passed, kind="contract", **details):
         if self._identity is None:
             return
         records = self.evidence.setdefault(model, {}).setdefault(role, [])
-        records.append({"kind": kind, "passed": bool(passed)})
+        if details.get("task_id"):
+            records[:] = [r for r in records if not (r.get("task_id") == details["task_id"] and r.get("kind") == kind)]
+        records.append({**details, "kind": kind, "passed": bool(passed)})
         del records[:-100]
         write_json(CACHE / ("model_evidence_" + self._identity + ".json"), self.evidence)
+
+    async def refresh_benchmarks(self):
+        """Optional metadata only, cached daily; failure must not block a game."""
+        if self.provider.name != "openrouter" or not self._identity:
+            return
+        now = time.time()
+        path = CACHE / ("benchmarks_" + self._identity + ".json")
+        if self._benchmarks_identity != self._identity:
+            self.benchmarks, self.benchmark_meta = {}, {}
+            self._benchmarks_next_check = 0
+            self._benchmarks_identity = self._identity
+            try:
+                saved = json.loads(path.read_text(encoding="utf-8"))
+                if (0 <= now - saved["checked_at"] < 86400 and isinstance(saved.get("models"), dict)
+                        and isinstance(saved.get("meta"), dict)):
+                    self.benchmarks, self.benchmark_meta = saved["models"], saved["meta"]
+                    self._benchmarks_next_check = saved["checked_at"] + 86400
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+        if now < self._benchmarks_next_check:
+            return
+        self._benchmarks_next_check = now + 300
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.get(self.provider.base_url + "/benchmarks",
+                    headers={"Authorization": "Bearer " + self.provider.api_key()})
+            if not response.is_success:
+                return
+            document = response.json()
+            if not isinstance(document, dict):
+                return
+            rows = document.get("data")
+            if not isinstance(rows, list):
+                return
+            grouped = {}
+            for row in rows:
+                if isinstance(row, dict) and isinstance(row.get("model_permaslug"), str):
+                    grouped.setdefault(row["model_permaslug"], []).append(row)
+            self.benchmarks, self.benchmark_meta = grouped, document.get("meta", {})
+            write_json(path, {"checked_at": now, "models": grouped, "meta": self.benchmark_meta})
+            self._benchmarks_next_check = now + 86400
+        except (httpx.HTTPError, ValueError, OSError):
+            pass
+
+    def hybrid_candidates(self, role, messages, max_tokens, budget, *, escalate=False, complex_task=False):
+        options = []
+        benchmarks = {}
+        for mid, model in self.models.items():
+            try:
+                if not self.text_eligible(mid) or not self._permitted(mid, self.roles.get(role, [])):
+                    continue
+                output = self.output_limit(mid, messages, max_tokens, budget, minimum_output(role, max_tokens))
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if output is None:
+                continue
+            options.append({"model": mid, "quoted_usd": self.text_ceiling(mid, messages, output),
+                            "requested_tokens": max_tokens, "output_tokens": output})
+            benchmarks[mid] = self.benchmarks.get(model.get("canonical_slug", mid), self.benchmarks.get(mid, []))
+        ranked = value_ranking(options, role, self.evidence, benchmarks, self.roles.get(role, []),
+                               escalate=escalate, complex_task=complex_task)
+        self.value_decisions[role] = {"policy": "hybrid", "reason": "failed_validation" if escalate else
+            "task_complexity" if complex_task else "measured_validation_failures" if ranked and not ranked[0]["economical"]
+            else "economical_first", "candidates": ranked[:4],
+            "eligible_count": len(options), "external_benchmarks_are_unity_results": False}
+        return [o["model"] for o in ranked[:4]]
 
     async def refresh(self):
         self.models, self.images = {}, {}
@@ -182,6 +299,7 @@ class Registry:
             self.unavailable.clear()
             self.unavailable_until.clear()
             self.json_disabled.clear()
+            self.unsupported_parameters.clear()
         self._identity = identity
         self.allowance = None
         try:
@@ -272,8 +390,13 @@ class Registry:
                 for m in catalog if isinstance(m, dict) and isinstance(m.get("id"), str)}
         self._save_catalog()
 
-    def candidates(self, role, messages=None, max_tokens=None, max_cost_usd=None, *, transparent=False):
+    def candidates(self, role, messages=None, max_tokens=None, max_cost_usd=None, *, transparent=False,
+                   hybrid=False, escalate=False, complex_task=False, reference=False):
         configured = self.roles.get(role, [])
+        if hybrid and self.provider.name == "openrouter" and role != "art" and messages is not None:
+            yield from self.hybrid_candidates(role, messages, max_tokens, max_cost_usd,
+                                              escalate=escalate, complex_task=complex_task)
+            return
 
         def fits_request(mid):
             if messages is None or max_tokens is None:
@@ -304,6 +427,17 @@ class Registry:
                 except (RuntimeError, KeyError, TypeError, ValueError):
                     continue
             order = (lambda item: (configured.index(item[1]) if item[1] in configured else len(configured), item[0]))
+            if hybrid and eligible:
+                image_evidence = {mid: {"art": [r for r in self.evidence.get(mid, {}).get("art", [])
+                    if r.get("kind") != "usable_image" or r.get("transparency_required") == transparent]}
+                    for _, mid in eligible}
+                ranked = value_ranking([{"model": mid, "quoted_usd": cost} for cost, mid in eligible],
+                                      "art", image_evidence, {}, configured, escalate=True)
+                def reference_fit(item):
+                    endpoint, _ = self.image_endpoint(item["model"], transparent=transparent)
+                    return reference and "input_references" not in endpoint.get("supported_parameters", {})
+                yield from (o["model"] for o in sorted(ranked, key=reference_fit)[:4])
+                return
             for _, mid in sorted(eligible, key=order if not self.dynamic() else None)[:4]:
                 yield mid
             return

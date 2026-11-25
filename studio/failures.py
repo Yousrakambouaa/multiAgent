@@ -76,9 +76,11 @@ def model_quality_report(job):
         assessment = "Recorded responses passed observed checks; this does not establish quality for untested game types."
     if not recommendations:
         assessment += " There is not enough comparative evidence to recommend a paid model."
+    from studio.costs import task_cost_report
     return {"status": "measured" if measured else "insufficient_evidence",
             "assessment": assessment, "models": measured,
-            "paid_model_recommendations": recommendations}
+            "paid_model_recommendations": recommendations, "costs": task_cost_report(job, events),
+            "escalations": [e for e in events if e.get("stage") in ("model_policy", "model_escalation")]}
 
 
 def failure_type(error):

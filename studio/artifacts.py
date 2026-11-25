@@ -6,6 +6,14 @@ from studio.state import write_json
 
 
 def package(job, project, report):
+    if job.data.get("model_policy") == "hybrid":
+        from studio.failures import model_quality_report
+        from studio.costs import task_cost_report
+        quality = model_quality_report(job)
+        report["model_quality"] = quality
+        report["cost_metrics"] = quality.get("costs", task_cost_report(job))
+        if report.get("completion_status") == "completed":
+            report["cost_metrics"]["reported_cost_per_completed_game_usd"] = report["cost_metrics"]["total_reported_usd"]
     report_path = job.directory / "validation_report.json"
     write_json(report_path, report)
     spec = json.loads((job.directory / "game_spec.json").read_text(encoding="utf-8"))

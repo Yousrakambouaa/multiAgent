@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 
 from studio.agents import GameDesigner, QADebugger, UnityDeveloper, demo_spec
 from studio.api import ModelService
@@ -134,6 +135,8 @@ class Supervisor:
                     job.data["status"]="rejected"; job.data["error"]="I can only create Unity games. Describe a specific game."
                     job.save(); return job
                 await self.registry.refresh()
+                if self.registry.provider.name == "openrouter":
+                    job.data.setdefault("model_policy", os.environ.get("STUDIO_OPENROUTER_POLICY", "hybrid"))
                 service = ModelService(self.registry, job)
                 # /create is an explicit instruction to build a game. Keep the
                 # classifier only for ordinary chat messages; ambiguity defaults
@@ -282,6 +285,8 @@ class Supervisor:
                     job.check_cancelled()
                     # Approval may arrive long after planning; reprice before work.
                     await self.registry.refresh()
+                    if self.registry.provider.name == "openrouter":
+                        job.data.setdefault("model_policy", os.environ.get("STUDIO_OPENROUTER_POLICY", "hybrid"))
                     service=ModelService(self.registry,job)
                     spec=load_game_spec((job.directory/"game_spec.json").read_text(encoding="utf-8"))
                     tooling_changes = align_tooling_requirements(spec)
@@ -329,7 +334,6 @@ class Supervisor:
                         for item in job.data.get("additional_instructions",[]):
                             if item.get("status")=="pending_approval": item["status"]="queued"
                     job.data["status"]="building"; job.save()
-                    import os
                     mode = os.environ.get("STUDIO_UNITY_MODE", "auto").lower()
                     project_path = job.directory / "UnityProject"
                     opened_before = project_is_open(project_path)

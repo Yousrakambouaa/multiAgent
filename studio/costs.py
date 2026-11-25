@@ -21,6 +21,45 @@ class BudgetExceeded(RuntimeError):
     pass
 
 
+def task_cost_report(job, events=(), completion_status=None):
+    """Reported bills and unknown reservations stay separate, including failures."""
+    grouped, checks = {}, {}
+    for event in events:
+        if event.get("stage") == "model_outcome" and event.get("task_id"):
+            key = (event["role"], event["task_id"], event.get("kind"))
+            checks[key] = bool(event.get("passed"))
+    succeeded = {}
+    tasks = {(role, task) for role, task, _ in checks}
+    for role, task in tasks:
+        kinds = {kind: passed for (r, t, kind), passed in checks.items() if (r, t) == (role, task)}
+        verified = kinds.get("unity") if role in ("developer", "scene") else kinds.get("contract", kinds.get("usable_image"))
+        if verified:
+            succeeded[role] = succeeded.get(role, 0) + 1
+    for entry in job.data.get("costs", []):
+        role = entry.get("role", "unknown")
+        item = grouped.setdefault(role, {"reported_usd": 0., "estimated_or_reserved_usd": 0., "attempts": 0})
+        field = "reported_usd" if entry.get("basis") == "reported API cost" else "estimated_or_reserved_usd"
+        item[field] += float(entry["charged_usd"])
+        item["attempts"] += 1
+    agents = {}
+    for role, item in grouped.items():
+        count = succeeded.get(role, 0)
+        item.update(successful_tasks=count, reported_cost_per_successful_task_usd=item["reported_usd"] / count if count else None)
+        owner = {"ui": "designer", "scene": "developer"}.get(role, role)
+        agent = agents.setdefault(owner, {"reported_usd": 0., "estimated_or_reserved_usd": 0.})
+        for field in agent:
+            agent[field] += item[field]
+    actual = sum(a["reported_usd"] for a in agents.values())
+    estimates = sum(a["estimated_or_reserved_usd"] for a in agents.values())
+    status = completion_status or job.data.get("status")
+    return {"by_task_profile": grouped, "by_agent": agents,
+            "total_reported_usd": actual, "total_estimated_or_reserved_usd": estimates,
+            "reported_cost_is_complete": all(e.get("basis") in ("reported API cost", "provider rejection (no completion)")
+                                             for e in job.data.get("costs", [])),
+            "reported_cost_per_completed_game_usd": actual if status == "completed" else None,
+            "note": "All failed attempts are included. API JSON alone is not task success; unknown costs are not reported bills."}
+
+
 class Ledger:
     def __init__(self, job):
         self.job = job

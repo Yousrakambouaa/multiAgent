@@ -112,6 +112,8 @@ class GameDesigner:
             try:
                 spec = GameSpecV2.model_validate(result)
                 validate_prompt_trace(spec, request)
+                if getattr(service, "hybrid", False) and hasattr(service, "record_contract_success"):
+                    service.record_contract_success("designer")
                 return spec
             except ValueError as error:
                 if hasattr(service, "record_contract_failure"):
@@ -131,12 +133,15 @@ class GameDesigner:
         """Plan UI as a Game Designer task using the existing UI model profile."""
         if getattr(spec, "version", 1) == 2:
             from studio.flexible import GameUIPlan
-            return GameUIPlan.model_validate(await service.json("ui",
+            plan = GameUIPlan.model_validate(await service.json("ui",
                 "Plan usable UI and control feedback for this exact game. Preserve the requested target and controls. "
                 "Do not inject touch buttons, menus or HUDs unless the specification needs them. Describe screen "
                 "layouts, hierarchy, anchors, readable sizes, input events, transitions and accessibility. "
                 "Use the supplied schema; implementation belongs to the Developer.",
                 {"game_spec": spec.model_dump(), "schema": GameUIPlan.model_json_schema()}, 2200))
+            if getattr(service, "hybrid", False) and hasattr(service, "record_contract_success"):
+                service.record_contract_success("ui")
+            return plan
         runtime = ("Describe only UI requested by this game's specification. UI must be implemented by the developer; "
                    "no menu, HUD or touch controls are supplied automatically."
                    if getattr(spec, "version", 1) == 2 else
@@ -312,7 +317,7 @@ class QADebugger:
         return validate_implementation(spec, current)
 
     async def review_implementation(self, service, spec, plan):
-        return PlanReview.model_validate(await service.json("qa",
+        review = PlanReview.model_validate(await service.json("qa",
             "You are QA & Debugger. Compare the ORIGINAL user request, every GameSpec requirement, implementation "
             "and behavioral probes. Report omitted prompt instructions, missing R IDs and concrete concerns. "
             "Check genre, dimension, camera, controls, progression, assets and UI. Compilation is not gameplay evidence. "
@@ -327,6 +332,9 @@ class QADebugger:
             {"original_request": service.job.data.get("effective_request", service.job.data["request"]), "game_spec": spec.model_dump(),
              "implementation": plan.model_dump(), "verification_evidence": getattr(service, "verification_evidence", {}),
              "schema": PlanReview.model_json_schema()}, 3000))
+        if getattr(service, "hybrid", False) and hasattr(service, "record_contract_success"):
+            service.record_contract_success("qa")
+        return review
 
     async def repair_implementation(self, service, spec, plan, diagnostics):
         caller = service.json

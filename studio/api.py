@@ -3,6 +3,7 @@ import json
 import re
 import os
 import time
+from uuid import uuid4
 
 import httpx
 
@@ -132,6 +133,9 @@ class ModelService:
         self._mcp_unavailable = False
         self.selected_models = {}
         self.contract_failures = {}
+        self._active_tasks = {}
+        self.selected_tasks = {}
+        self.hybrid = self.provider.name == "openrouter" and job.data.get("model_policy") == "hybrid"
         blocks = job.data.get("openrouter_model_blocks", {})
         if (self.provider.name == "openrouter" and blocks.get("identity") == getattr(registry, "_identity", None)
                 and hasattr(registry, "unavailable")):
@@ -171,27 +175,36 @@ class ModelService:
             self.ledger.bind_allowance(self.registry.allowance)
 
     def record_validation(self, role, passed):
-        model = self.selected_models.get(role)
+        source_role = "developer" if self.hybrid and role == "scene" and role not in self.selected_models else role
+        model = self.selected_models.get(source_role)
+        if self.hybrid and not passed:
+            for profile in {role, "qa"}:
+                self.job.data.setdefault("model_escalations", {})[profile] = "unity_validation_failed"
         if model and hasattr(self.registry, "record_outcome"):
-            self.registry.record_outcome(model, role, passed, kind="unity")
+            details = {"task_id": self.selected_tasks.get(source_role)} if self.hybrid else {}
+            self.registry.record_outcome(model, role, passed, kind="unity", **details)
             self.job.event(role, "model_outcome", provider=self.provider.name, model=model,
-                           kind="unity", passed=bool(passed))
+                           kind="unity", passed=bool(passed), **details)
 
     def record_contract_failure(self, role):
         model = self.selected_models.get(role)
         if model:
             self.contract_failures.setdefault(role, set()).add(model)
         if model and hasattr(self.registry, "record_outcome"):
-            self.registry.record_outcome(model, role, False, kind="contract")
+            details = {"task_id": self.selected_tasks.get(role)} if self.hybrid else {}
+            if self.hybrid:
+                self.job.data.setdefault("model_escalations", {})[role] = "contract_validation_failed"
+            self.registry.record_outcome(model, role, False, kind="contract", **details)
             self.job.event(role, "model_outcome", provider=self.provider.name, model=model,
-                           kind="contract", passed=False)
+                           kind="contract", passed=False, **details)
 
     def record_contract_success(self, role):
         model = self.selected_models.get(role)
         if model and hasattr(self.registry, "record_outcome"):
-            self.registry.record_outcome(model, role, True, kind="contract")
+            details = {"task_id": self.selected_tasks.get(role)} if self.hybrid else {}
+            self.registry.record_outcome(model, role, True, kind="contract", **details)
             self.job.event(role, "model_outcome", provider=self.provider.name, model=model,
-                           kind="contract", passed=True)
+                           kind="contract", passed=True, **details)
 
     async def unity_context(self, role):
         """Supply real role-scoped Unity observations to the existing agents."""
@@ -231,6 +244,8 @@ class ModelService:
         await self.refresh_budget()
         key = self.provider.api_key()
         entry = self.ledger.reserve(role, model, ceiling)
+        if self.hybrid:
+            entry["task_id"] = self._active_tasks.get(role)
         self.job.event(role, "api_call", model=model, reserved_usd=ceiling)
         timeout = min(REQUEST_TIMEOUT_SECONDS, OPENROUTER_TIMEOUT_SECONDS) if self.provider.name == "openrouter" else REQUEST_TIMEOUT_SECONDS
         try:
@@ -296,22 +311,38 @@ class ModelService:
 
     async def json(self, role, system, value, max_tokens=5000):
         await self.refresh_budget()
+        if (self.hybrid and self.job.data.get("openrouter_rate_limited_key") == getattr(self.registry, "_identity", None)
+                and self.job.data.get("openrouter_account_retry_at", 0) > time.time()):
+            raise ModelAttemptsFailed(self.provider.label, role, [],
+                "OpenRouter reported an account-wide rate limit; saved progress is preserved until Retry-After.", fallback_blocked=True)
+        from studio.model_selection import compact_context, complex_request
+        complex_task = complex_request(value) if self.hybrid else False
+        escalated = self.hybrid and bool(self.job.data.get("model_escalations", {}).get(role))
+        if self.hybrid:
+            await self.registry.refresh_benchmarks()
+            self._active_tasks[role] = uuid4().hex
         # Frameworks keep using the same metered gateway. Observations are data,
         # never instructions, model-selected commands, or arbitrary MCP arguments.
         owner = {"ui": "designer", "scene": "developer"}.get(role, role)
         shared = self.job.data.get("shared_context")
         if shared:
+            if self.hybrid:
+                shared = compact_context(value, shared)
             value = {"task": value, "shared_game_context": shared,
                      "assigned_work": [item for item in self.job.data.get("work_items", []) if item["owner"] == owner]}
         unity = await self.unity_context(owner)
         if unity:
             value = {"task": value, "unity_tool_observation": unity}
         messages = [{"role": "system", "content": system + "\nReturn only valid JSON."},
-                    {"role": "user", "content": json.dumps(value, ensure_ascii=False)}]
+                    {"role": "user", "content": json.dumps(value, ensure_ascii=False,
+                        **({"separators": (",", ":")} if self.hybrid else {}))}]
         errors = []
         discovered = list(self.registry.candidates(role))
+        policy = {"hybrid": True, "escalate": escalated, "complex_task": complex_task} if self.hybrid else {}
         candidates = list(self.registry.candidates(
-            role, messages, max_tokens, float(self.ledger.request_budget(role))))
+            role, messages, max_tokens, float(self.ledger.request_budget(role)), **policy))
+        if self.hybrid:
+            self.job.event(role, "model_policy", **self.registry.value_decisions.get(role, {}))
         rejected = self.contract_failures.get(role, set())
         # A JSON envelope is not a valid game implementation. Try an unfailed
         # eligible model before asking the same model to correct itself again.
@@ -420,6 +451,9 @@ class ModelService:
                         payload["reasoning"] = {"enabled": True}
                     else:
                         payload["reasoning"] = {"enabled": reasoning_enabled}
+                if self.hybrid:
+                    for parameter in self.registry.unsupported_parameters.get(model, set()):
+                        payload.pop(parameter, None)
                 try:
                     from studio.model_selection import capabilities
                     self.job.event(role, "model_selected", provider=self.provider.name, model=model,
@@ -429,6 +463,8 @@ class ModelService:
                     data = await self.post("chat/completions", payload, role, model, ceiling)
                     result = decode_json_response(data)
                     self.selected_models[role] = model
+                    if self.hybrid:
+                        self.selected_tasks[role] = self._active_tasks[role]
                     if hasattr(self.registry, "record_outcome"):
                         self.registry.record_outcome(model, role, True, kind="availability")
                     self.job.event(role, "model_response_validated", provider=self.provider.name, model=model)
@@ -477,17 +513,47 @@ class ModelService:
                         self.registry.json_disabled.add(model)
                         self.job.event(role, "json_mode_retry", model=model, response_format=False)
                         continue
+                    if (self.hybrid and isinstance(error, ServiceRejected) and error.status in (400, 422)
+                            and any(s in str(error).casefold() for s in ("unsupported", "not supported", "unrecognized", "unknown parameter"))):
+                        optional = [p for p in ("temperature", "reasoning") if p in payload
+                                    and re.search(r"\b" + p + r"\b", str(error), re.I)]
+                        if optional:
+                            self.registry.unsupported_parameters.setdefault(model, set()).update(optional)
+                            self.job.event(role, "optional_parameter_retry", model=model, removed=optional)
+                            continue
+                    if (self.hybrid and isinstance(error, ServiceRejected) and error.status == 429
+                            and (error.limit_source in ("openrouter_account", "openrouter_key", "account", "key")
+                                 or "account-wide" in str(error).casefold() or "key-wide" in str(error).casefold())):
+                        self.job.data.update(openrouter_rate_limited_key=getattr(self.registry, "_identity", None),
+                            openrouter_account_retry_at=time.time() + max(1, error.retry_after or 60))
+                        self.job.save()
+                        raise ModelAttemptsFailed(self.provider.label, role, errors,
+                            "OpenRouter reported an account-wide rate limit; changing models cannot resolve this limit.",
+                            fallback_blocked=True) from error
                     if hasattr(self.registry, "record_outcome") and not excluded_availability:
                         self.registry.record_outcome(model, role, False,
                             kind="contract" if isinstance(error, ResponseInvalid) else "availability")
+                    if self.hybrid and isinstance(error, ResponseInvalid):
+                        self.job.data.setdefault("model_escalations", {})[role] = "invalid_json_or_output_limit"
+                        alternatives = list(self.registry.candidates(role, messages, max_tokens,
+                            float(self.ledger.request_budget(role)), hybrid=True, escalate=True, complex_task=complex_task))
+                        tried = candidates[:model_index]
+                        candidates = tried + [mid for mid in alternatives if mid not in tried][:max(0, 4 - model_index)]
+                        self.job.event(role, "model_escalation", from_model=model,
+                            trigger="invalid_json_or_output_limit", **self.registry.value_decisions.get(role, {}))
                     if (not truncated_retry_used and isinstance(error, ResponseInvalid)
                             and error.truncated and request_max_tokens < 32000):
                         # Reasoning consumes output tokens too. Retry a complete
                         # contract once, under a new reservation and the same cap.
                         truncated_retry_used = True
-                        request_max_tokens = min(32000, request_max_tokens * 2)
-                        self.job.event(role, "output_limit_retry", model=model, retry_tokens=request_max_tokens)
-                        continue
+                        grown = min(32000, request_max_tokens * 2)
+                        if self.hybrid:
+                            grown = self.registry.output_limit(model, messages, grown,
+                                float(self.ledger.request_budget(role))) or 0
+                        if grown > request_max_tokens:
+                            request_max_tokens = grown
+                            self.job.event(role, "output_limit_retry", model=model, retry_tokens=request_max_tokens)
+                            continue
                     if (self.provider.name == "openrouter" and not reasoning_retry_used
                             and isinstance(error, ServiceRejected) and error.status == 400
                             and any(marker in str(error).casefold() for marker in (
@@ -545,6 +611,8 @@ class ModelService:
                     delay = getattr(error, "retry_after", None) or 1
                     if (not transient_retry_used and not isinstance(error, RequestDeadlineExceeded)
                             and (transient or isinstance(error, httpx.TransportError))
+                            and not (self.hybrid and (isinstance(error, httpx.TimeoutException) or
+                                 isinstance(error, ServiceRejected) and error.status == 429))
                             and delay <= 10):
                         transient_retry_used = True
                         self.job.check_cancelled()
