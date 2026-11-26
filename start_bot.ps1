@@ -75,6 +75,3 @@ Write-Host 'Starting Telegram bot. Press Ctrl+C to stop it.'
 # The bot itself acquires the lock; a simultaneous launch can still lose the race safely.
 & $python $bot
 exit $LASTEXITCODE
-
-
-Stop-Process -Id 26860 -Force

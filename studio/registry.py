@@ -61,17 +61,6 @@ DEFAULTS = {
 }
 
 
-# DEFAULTS = {
-#     "supervisor": ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol", "anthropic/claude-sonnet-5.5"],
-#     "designer": ["anthropic/claude-sonnet-5.5", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
-#     "developer": ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
-#     "scene": ["openai/gpt-6.2-astra", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
-#     "qa": ["anthropic/claude-sonnet-5.5", "openai/gpt-6.2-sol", "openai/gpt-5.3-codex"],
-#     "ui": ["anthropic/claude-sonnet-5.5", "openai/gpt-6.1-terra", "openai/gpt-5.3-codex"],
-#     "art": ["bytedance-seed/seedream-5-5", "recraft/recraft-v4.1-flash", "black-forest-labs/flux.2-klein-4b"],
-# }
-
-
 class ProviderCatalogError(RuntimeError):
     def __init__(self, provider, operation, status, message):
         self.provider = provider

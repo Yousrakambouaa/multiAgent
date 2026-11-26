@@ -1,13 +1,14 @@
-# Python environment, credentials and machine-local state
-/.venv/
+# Credentials, machine-local configuration, and signing material
 /.env
 /.env.*
 !/.env.example
-__pycache__/
-*.py[cod]
-/.logs/
-/.studio_cache/
+*.local
+*.local.json
 /.vscode/
+/.idea/
+/.aws/
+/.codex/
+/.agents/
 *.keystore
 *.jks
 *.p12
@@ -15,37 +16,76 @@ __pycache__/
 *.pem
 *.key
 
-# Keep the base Unity project's source, packages and settings only.
-/generated_game/*
-!/generated_game/Assets/
-!/generated_game/Packages/
-!/generated_game/ProjectSettings/
+# Python environments, bytecode, packaging, and test output
+/.venv/
+/venv/
+/env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.egg-info/
+/build/
+/dist/
 
-# Keep generated Unity source projects, but not chat/job records or build outputs.
+# Local Studio state, diagnostics, research snapshots, and OS-held locks
+/.studio_cache/
+/.logs/
+/.codex-test-tmp/
+/.test-tmp/
+/tests/.test-tmp/
+/tests/.mcp-test-*/
+*.log
+*.lock
+*.tmp
+/model_catalog.json
+/image_model_catalog.json
+/*_endpoints.json
+
+# Jobs contain prompts, chat identifiers, generated games, and delivery artifacts.
+# Keep only the directory's usage documentation in the release.
 /jobs/*
 !/jobs/README.md
-!/jobs/*/
-/jobs/*/*
-!/jobs/*/UnityProject/
-/jobs/*/UnityProject/*
-!/jobs/*/UnityProject/Assets/
-!/jobs/*/UnityProject/Packages/
-!/jobs/*/UnityProject/ProjectSettings/
 
-# Unity-generated local state and compiled installers
+# Preserve the seed required by studio.unity.bootstrap, not the legacy demo game.
+/generated_game/*
+!/generated_game/README.md
+!/generated_game/Packages/
+!/generated_game/ProjectSettings/
+!/generated_game/Assets/
+/generated_game/Assets/*
+!/generated_game/Assets/Settings.meta
+!/generated_game/Assets/Settings/
+
+# Optional licensed asset library is user-owned; never publish it automatically.
+/asset_library/
+
+# Unity recreates these directories. Package lock manifests remain tracked.
 **/[Ll]ibrary/
 **/[Tt]emp/
 **/[Oo]bj/
 **/[Ll]ogs/
 **/[Uu]ser[Ss]ettings/
+**/[Bb]uild/
+**/[Bb]uilds/
+**/Artifacts/
+**/ProjectSettings/StudioMCP.json
 *.csproj
 *.sln
 *.slnx
+*.pidb
+*.booproj
 *.apk
 *.aab
-*.log
-
-# Temporary model research snapshots
-/model_catalog.json
-/image_model_catalog.json
-/*_endpoints.json
+*.unitypackage
+*.apk.meta
+*.aab.meta
+.DS_Store
+Thumbs.db

@@ -1,16 +1,16 @@
-# Generated Unity source projects
+# Local game jobs
 
-Each folder is an isolated Unity project. Only `Assets`, `Packages`, and `ProjectSettings` are versioned. Unity recreates its import/build caches locally.
+The studio creates one dated directory per request, with a saved job record,
+specification, generated Unity project, validation evidence, and delivery files.
+`current.txt` identifies the current job; `studio_settings.json` stores the local
+default budget.
 
-The table records the generation status at the time these existing projects were added. Failed projects are included as partial source, not completed games.
+Everything here except this README is excluded from Git. Jobs can contain private
+prompts, Telegram identifiers, local interpreter paths, API cost records, and
+user-owned art. Back up the complete job directory to retain resumability.
+Deleting a generated Unity project's import cache is different from deleting its
+saved job or assets; do not remove job data while the studio is using it.
 
-| Job ID | Status | Source |
-| --- | --- | --- |
-| `20261118T161316-5e7833` | Completed; passed the required prototype checks | [Unity project](20261118T161316-5e7833/UnityProject/) |
-| `20261118T171606-f7047b` | Completed; passed the required prototype checks | [Unity project](20261118T171606-f7047b/UnityProject/) |
-| `20261118T181217-c18421` | Partial; generation failed and this is not a verified finished game | [Unity project](20261118T181217-c18421/UnityProject/) |
-| `20261119T110217-d0da5c` | Partial; generation failed and this is not a verified finished game | [Unity project](20261119T110217-d0da5c/UnityProject/) |
-
-Open a project's `UnityProject` folder in Unity Hub. Use its `ProjectSettings/ProjectVersion.txt` to select the Unity version. For completed games, open the menu scene under `Assets/Studio/Scenes` and press Play.
-
-Job records, original chat requests, cost ledgers, current-job pointers, logs, screenshots, ZIPs and APKs remain local. A Git clone can open these Unity projects, but cannot resume their original studio jobs without the local job records.
+The public source tree does not ship generated games or claim that a local game
+is a reproducible result of the current model catalog. See the root README for
+offline tests and explicit Unity verification commands.
